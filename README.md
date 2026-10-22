@@ -8,6 +8,17 @@ No history, no charts, no daemon: one `LSUIElement` process, one run loop, no IP
 
 `install.sh` is also the update command: it is idempotent and safe to run any time.
 
+### Install from Releases (.dmg)
+
+1. Open the [Releases](../../releases) page and download the latest `macmon-<tag>.dmg`.
+2. Open the DMG and drag `macmon.app` to `Applications`.
+3. Launch `macmon` once from `Applications`.
+
+### Add to Login Items (manual)
+
+1. Open **System Settings** → **General** → **Login Items & Extensions**.
+2. Under **Open at Login**, click **+** and select `Applications/macmon.app`.
+
 | Action | Command |
 |---|---|
 | Install, update, or reinstall | `./scripts/install.sh` |
