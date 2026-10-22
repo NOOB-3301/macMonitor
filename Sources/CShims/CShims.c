@@ -2,6 +2,7 @@
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/IOKitLib.h>
+#include <dlfcn.h>
 #include <libproc.h>
 #include <mach/mach.h>
 #include <mach/mach_host.h>
@@ -12,13 +13,16 @@
 #include <net/if_var.h>
 #include <ifaddrs.h>
 #include <stdlib.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/proc_info.h>
+#include <sys/resource.h>
 #include <sys/sysctl.h>
 #include <sys/syslimits.h>
 #include <sys/types.h>
 #include <sys/unistd.h>
+#include <unistd.h>
 
 static int mm_debug_enabled(void) {
     return getenv("MM_DEBUG") != NULL;
@@ -541,6 +545,7 @@ int mm_session_procs(mm_proc_session *out, int max) {
 }
 
 #include <dlfcn.h>
+#include <errno.h>
 
 typedef struct sqlite3 sqlite3;
 typedef struct sqlite3_stmt sqlite3_stmt;
@@ -691,4 +696,51 @@ void mm_db_close(void) {
         dlclose(mm_sqlite_lib);
         mm_sqlite_lib = NULL;
     }
+}
+
+int mm_top_procs(mm_proc_stat *out, int max) {
+    int count = proc_listallpids(NULL, 0);
+    if (count <= 0) return 0;
+    size_t size = (size_t)(count + 64) * sizeof(pid_t);
+    pid_t *pids = malloc(size);
+    if (!pids) return 0;
+    int total = proc_listallpids(pids, (int)size);
+    pid_t self = getpid();
+    int n = 0;
+    for (int i = 0; i < total && n < max; i++) {
+        if (pids[i] <= 0 || pids[i] == self) continue;
+        struct rusage_info_v2 ri;
+        if (proc_pid_rusage(pids[i], RUSAGE_INFO_V2, (rusage_info_t)&ri) != 0) {
+            continue;
+        }
+        mm_proc_stat *entry = &out[n++];
+        entry->pid = pids[i];
+        entry->cpu_micros = ri.ri_user_time + ri.ri_system_time;
+        entry->footprint = ri.ri_phys_footprint;
+    }
+    free(pids);
+    return n;
+}
+
+int mm_proc_path(pid_t pid, char *buf, int len) {
+    if (!buf || len <= 0) return -1;
+    return proc_pidpath(pid, buf, (uint32_t)len);
+}
+
+int mm_proc_ancestors(pid_t pid, int *out, int max) {
+    if (!out || max <= 0) return 0;
+    int n = 0;
+    pid_t current = pid;
+    for (int depth = 0; depth < 32 && n < max; depth++) {
+        struct kinfo_proc kp;
+        memset(&kp, 0, sizeof(kp));
+        int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, current};
+        size_t size = sizeof(kp);
+        if (sysctl(mib, 4, &kp, &size, NULL, 0) != 0 || size <= 0) break;
+        pid_t parent = kp.kp_eproc.e_ppid;
+        if (parent <= 1) break;
+        out[n++] = parent;
+        current = parent;
+    }
+    return n;
 }

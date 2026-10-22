@@ -78,3 +78,13 @@ typedef struct {
 int mm_db_sessions(const char *path, const char *const *ids, int nkeys,
                    mm_db_session *out, int max, char *errbuf, int errsize);
 void mm_db_close(void);
+
+typedef struct {
+    int pid;
+    uint64_t cpu_micros;
+    uint64_t footprint;
+} mm_proc_stat;
+
+int mm_top_procs(mm_proc_stat *out, int max);
+int mm_proc_path(pid_t pid, char *buf, int len);
+int mm_proc_ancestors(pid_t pid, int *out, int max);

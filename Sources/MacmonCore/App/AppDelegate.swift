@@ -4,6 +4,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private let monitor = SystemMonitor()
     private let claude = ClaudeUsageService()
     private let scanner = SessionScanner()
+    private let sampler = ProcessSampler()
+    private var debouncer = AlertDebouncer()
     private let notch: NotchController
 
     public override init() {
@@ -89,7 +91,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         claude.refreshIfDue()
         updateStatusItem()
         if panelVisible {
-            notch.update(lastSnapshot, claude.usage)
+            let result = sampler.poll()
+            let raw = AlertEngine.evaluate(lastSnapshot, thresholds: notch.currentThresholds(),
+                                           cpuTop: result.cpuTop, memTop: result.memTop)
+            let alerts = debouncer.observe(raw)
+            notch.update(lastSnapshot, claude.usage, alerts: alerts)
         }
     }
 
@@ -97,8 +103,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         panelVisible = notch.isVisible
         schedule(interval: panelVisible ? 2 : 5)
         if panelVisible {
+            sampler.reset()
             lastSnapshot = monitor.refresh()
-            notch.update(lastSnapshot, claude.usage)
+            notch.update(lastSnapshot, claude.usage, alerts: [])
+        } else {
+            sampler.reset()
+            debouncer.reset()
         }
         updateStatusItem()
     }
@@ -106,7 +116,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private func claudeChanged(_ usage: ClaudeUsage) {
         updateStatusItem()
         if panelVisible {
-            notch.update(lastSnapshot, usage)
+            notch.update(lastSnapshot, usage, alerts: [])
         }
     }
 

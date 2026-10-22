@@ -1,4 +1,5 @@
 import AppKit
+import CShims
 import MacmonCore
 
 if CommandLine.arguments.contains("--selftest") {
@@ -6,9 +7,12 @@ if CommandLine.arguments.contains("--selftest") {
 }
 
 if CommandLine.arguments.contains("--render")
-    || CommandLine.arguments.contains("--render-sessions") {
+    || CommandLine.arguments.contains("--render-sessions")
+    || CommandLine.arguments.contains("--render-limits") {
     let renderSessionMode = CommandLine.arguments.contains("--render-sessions")
-    let flag = renderSessionMode ? "--render-sessions" : "--render"
+    let flag = renderSessionMode ? "--render-sessions"
+        : CommandLine.arguments.contains("--render-limits") ? "--render-limits"
+        : "--render"
     let index = CommandLine.arguments.firstIndex(of: flag)!
     let path = CommandLine.arguments[index + 1]
     let application = NSApplication.shared
@@ -54,10 +58,35 @@ if CommandLine.arguments.contains("--render")
                            sessionID: "ses_b", directory: "/tmp", title: nil),
         ]
     }
+    var renderAlerts: [AlertLine] = []
+    var renderThresholds = Thresholds()
+    if CommandLine.arguments.contains("--render-limits") {
+        renderMode = .limits
+        renderThresholds = Thresholds(cpu: 90, mem: 85, gpu: 70)
+    } else if !renderSessionMode {
+        renderAlerts = [
+            AlertLine(metric: .cpu, text: "over ≥ 85% ·node 228%", severity: .orange),
+            AlertLine(metric: .mem, text: "over ≥ 85% ·system-wide", severity: .red),
+            AlertLine(metric: .gpu, text: "over ≥ 85% ·busy", severity: .orange),
+        ]
+    }
+
+    var hot = snapshot
+    if !renderSessionMode {
+        hot.cpu.total = max(hot.cpu.total, 88)
+        hot.cpu.load1 = max(hot.cpu.load1, 6.2)
+        hot.memory.used = max(hot.memory.used, hot.memory.total * 92 / 100)
+        hot.memory.swapUsed = max(hot.memory.swapUsed, 1_200_000_000)
+        hot.memory.compressed = max(hot.memory.compressed, 900_000_000)
+        hot.memory.wired = max(hot.memory.wired, 1_600_000_000)
+        hot.gpu.available = true
+        hot.gpu.utilization = max(hot.gpu.utilization, 91)
+    }
 
     let view = PanelView(frame: NSRect(origin: .zero, size: PanelView.size))
     view.setMode(renderMode, sessions: renderSessions)
-    view.update(snapshot: snapshot, claude: claude)
+    view.update(snapshot: hot, claude: claude,
+                alerts: renderAlerts, thresholds: renderThresholds)
 
     let container = NSView(frame: view.frame)
     container.wantsLayer = true
@@ -135,6 +164,26 @@ if CommandLine.arguments.contains("--probe") {
     RunLoop.main.run(until: Date().addingTimeInterval(25))
     print("claude timeout")
     exit(1)
+}
+
+
+if CommandLine.arguments.contains("--toptest") {
+    var stats = [mm_proc_stat](repeating: mm_proc_stat(), count: 4096)
+    let maxCount = stats.count
+    let count = stats.withUnsafeMutableBufferPointer { buffer -> Int32 in
+        mm_top_procs(buffer.baseAddress, Int32(maxCount))
+    }
+    var sorted = stats[0..<Int(count)].sorted { $0.footprint > $1.footprint }
+    print("count=\(count) top MEM:")
+    for entry in sorted.prefix(5) {
+        print("  pid=\(entry.pid) footprint=\(String(format: "%.2f", Double(entry.footprint) / 1073741824)) GB:")
+    }
+    sorted.sort { $0.cpu_micros > $1.cpu_micros }
+    print("top CPU:")
+    for entry in sorted.prefix(5) {
+        print("  pid=\(entry.pid) cpu=\(entry.cpu_micros / 1_000_000)s")
+    }
+    exit(0)
 }
 
 private let application = NSApplication.shared

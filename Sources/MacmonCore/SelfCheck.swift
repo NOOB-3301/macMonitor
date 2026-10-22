@@ -102,6 +102,42 @@ public enum SelfCheck {
         let weeklyNoReset = UsageProjection.weeklyText(util: 52, resetsAt: nil, now: now) ?? ""
         equal("projection weekly no reset", weeklyNoReset, "52% used")
 
+        var presets = Thresholds(cpu: 85, mem: 90, gpu: 85)
+        presets.cycle(.cpu)
+        equal("threshold cycle cpu", String(presets.cpu), "90")
+        presets.cycle(.gpu)
+        equal("threshold cycle gpu", String(presets.gpu), "95")
+        presets.cycle(.gpu)
+        equal("threshold cycle gpu wrap", String(presets.gpu), "60")
+        presets.cycle(.mem)
+        equal("threshold cycle mem", String(presets.mem), "95")
+
+        var thresholds = Thresholds(cpu: 70, mem: 80, gpu: 85)
+        let nowAlert = Date()
+        let boundSnapshot = Snapshot(
+            timestamp: nowAlert,
+            cpu: CPUReading(total: 88),
+            memory: MemoryReading(used: 90, total: 100),
+            gpu: GPUReading(available: true, utilization: 12))
+        let cpuAlerts = AlertEngine.evaluate(
+            boundSnapshot, thresholds: thresholds,
+            cpuTop: [ProcessSample(pid: 1, name: "node", utilization: 214.0)],
+            memTop: [ProcessSample(pid: 2, name: "Code", footprint: 2_000_000_000)])
+        equal("alert cpu text", cpuAlerts[0].text, "over ≥70% · node 214%")
+        equal("alert cpu severity", cpuAlerts[0].severity == .orange ? "orange" : "red", "orange")
+        equal("alert mem text", cpuAlerts[1].text, "over ≥80% · Code 1.9 GB")
+        equal("alert gpu none", String(cpuAlerts.count), "2")
+
+        var debouncer = AlertDebouncer()
+        let firstObserve = debouncer.observe([AlertLine(metric: .cpu, text: "x", severity: .orange)])
+        equal("debounce suppressed", firstObserve.isEmpty ? "1" : "0", "1")
+        let secondObserve = debouncer.observe([AlertLine(metric: .cpu, text: "x", severity: .orange)])
+        equal("debounce raised", secondObserve.isEmpty ? "1" : "0", "0")
+
+        near("process util single core", ProcessSampler.utilizationPercent(deltaMicros: 1_300_000, elapsed: 2), 65)
+        near("process util clamp", ProcessSampler.utilizationPercent(deltaMicros: 999_000_000, elapsed: 2), 800)
+        near("process util idle", ProcessSampler.utilizationPercent(deltaMicros: 0, elapsed: 2), 0)
+
         if Self.sessionIDParse("claude -s ses_abc123 --foo") != "ses_abc123" {
             failures += 1
             print("FAIL session id parse -s")

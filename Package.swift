@@ -17,7 +17,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "MacmonApp",
-            dependencies: ["MacmonCore"],
+            dependencies: ["MacmonCore", "CShims"],
             path: "Sources/MacmonApp",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),

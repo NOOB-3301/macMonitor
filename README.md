@@ -148,8 +148,20 @@ minutes of utilization samples: `exhausted` (red), `runout ~… before reset`
 `opencode` processes with their terminal tty and working directory. `opencode`
 rows are enriched with title/directory from the local `opencode.db`
 (read-only, loaded via dlopen only while the page is open). Clicking a row
-focuses the terminal tab (iTerm2 or Terminal) via that tty, falling back to
-opening the directory in Finder.
+focuses the host app: the parent chain of the session process is walked until a
+running application is found — VS Code is activated, Terminal/iTerm2 are
+activated and the matching tty tab is selected. If no host app resolves, the
+click does nothing.
+
+### Threshold alerts
+
+`LIMITS ›` opens the limits page where tapping CPU / MEM / GPU cycles through
+presets (CPU 70–95%, MEM 80–95%, GPU 60–95%); values persist in
+`UserDefaults`. While the panel is open, a metric above its limit replaces that
+row's detail line with the top offender: the highest-CPU process (with ≥10%
+utilization) for CPU, the largest process ≥1 GB for memory, `busy` for GPU
+(per-process GPU attribution is not exposed by macOS, so the GPU line stays
+generic). Alerts need two consecutive hot samples and clear when usage drops.
 
 ## Memory and footprint
 
@@ -176,6 +188,8 @@ swift build -c release
 .build/release/MacmonApp --geometry   # screen, notch rect, trigger rect
 .build/release/MacmonApp --render /tmp/panel.png   # render the metrics page to PNG
 .build/release/MacmonApp --render-sessions /tmp/sessions.png   # render the sessions page to PNG
+.build/release/MacmonApp --render-limits /tmp/limits.png   # render the limits page to PNG
+.build/release/MacmonApp --toptest   # dump top CPU/MEM processes once
 .build/release/MacmonApp --sessions   # print running claude/opencode sessions
 MM_DEBUG=1 .build/release/MacmonApp --probe   # verbose SMC discovery/values
 MACMON_DEMO=1 .build/release/MacmonApp        # open the panel after 1.5 s

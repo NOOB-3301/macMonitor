@@ -3,12 +3,15 @@ import AppKit
 public enum PanelMode: Equatable {
     case metrics
     case sessions
+    case limits
 }
 
 public final class PanelView: NSView {
     public enum PanelAction: Equatable {
         case openSessions
+        case openLimits
         case back
+        case cycleLimit(ThresholdKind)
         case focus(pid: Int32)
         case quit
     }
@@ -33,9 +36,13 @@ public final class PanelView: NSView {
     private var sessions: [RunningSession] = []
 
     private var openSessionsRect: NSRect?
+    private var openLimitsRect: NSRect?
     private var backRect: NSRect?
     private var quitRect: NSRect?
     private var rowRects: [NSRect] = []
+    private var limitRowRects: [(ThresholdKind, NSRect)] = []
+    private var alerts: [AlertLine] = []
+    private var thresholds = Thresholds()
 
     private let padding: CGFloat = 16
     private let labelFont = NSFont.systemFont(ofSize: 10.5, weight: .bold)
@@ -53,9 +60,14 @@ public final class PanelView: NSView {
         needsDisplay = true
     }
 
-    public func update(snapshot: Snapshot, claude: ClaudeUsage) {
+    public func update(snapshot: Snapshot, claude: ClaudeUsage,
+                       alerts: [AlertLine] = [], thresholds: Thresholds? = nil) {
         self.snapshot = snapshot
         self.claude = claude
+        self.alerts = alerts
+        if let thresholds {
+            self.thresholds = thresholds
+        }
         needsDisplay = true
     }
 
@@ -68,6 +80,9 @@ public final class PanelView: NSView {
             if let rect = openSessionsRect, rect.contains(point) {
                 return .openSessions
             }
+            if let rect = openLimitsRect, rect.contains(point) {
+                return .openLimits
+            }
         case .sessions:
             if let rect = backRect, rect.contains(point) {
                 return .back
@@ -76,20 +91,31 @@ public final class PanelView: NSView {
                 guard index < sessions.count else { break }
                 return .focus(pid: sessions[index].pid)
             }
+        case .limits:
+            if let rect = backRect, rect.contains(point) {
+                return .back
+            }
+            for (kind, rect) in limitRowRects where rect.contains(point) {
+                return .cycleLimit(kind)
+            }
         }
         return nil
     }
 
     public override func draw(_ dirtyRect: NSRect) {
         openSessionsRect = nil
+        openLimitsRect = nil
         backRect = nil
         quitRect = nil
         rowRects = []
+        limitRowRects = []
         switch mode {
         case .metrics:
             drawMetricsPage()
         case .sessions:
             drawSessionsPage()
+        case .limits:
+            drawLimitsPage()
         }
         drawQuit()
     }
@@ -103,6 +129,7 @@ public final class PanelView: NSView {
             value: Format.percent(snapshot.cpu.total),
             detail: "load \(String(format: "%.2f", snapshot.cpu.load1))  ·  \(snapshot.cpu.perCore.count) cores",
             fraction: snapshot.cpu.total / 100,
+            alert: alertLine(.cpu),
             y: y
         )
         y = drawMetric(
@@ -110,6 +137,7 @@ public final class PanelView: NSView {
             value: "\(Format.bytes(snapshot.memory.used)) / \(Format.bytes(snapshot.memory.total))",
             detail: "wired \(Format.bytes(snapshot.memory.wired))  ·  comp \(Format.bytes(snapshot.memory.compressed))  ·  swap \(Format.bytes(snapshot.memory.swapUsed))",
             fraction: snapshot.memory.fraction,
+            alert: alertLine(.mem),
             y: y
         )
         y = drawMetric(
@@ -117,6 +145,7 @@ public final class PanelView: NSView {
             value: snapshot.gpu.available ? Format.percent(snapshot.gpu.utilization) : "--",
             detail: nil,
             fraction: snapshot.gpu.available ? snapshot.gpu.utilization / 100 : nil,
+            alert: alertLine(.gpu),
             y: y
         )
         y = drawMetric(
@@ -124,6 +153,7 @@ public final class PanelView: NSView {
             value: "\u{2193} \(Format.rate(snapshot.network.down))   \u{2191} \(Format.rate(snapshot.network.up))",
             detail: activeInterfaceDetail(),
             fraction: nil,
+            alert: nil,
             y: y
         )
         y = drawMetric(
@@ -131,6 +161,7 @@ public final class PanelView: NSView {
             value: temperatureValue(),
             detail: temperatureDetail(),
             fraction: nil,
+            alert: nil,
             y: y
         )
 
@@ -141,12 +172,86 @@ public final class PanelView: NSView {
 
         _ = drawClaude(from: y)
 
-        let rowRect = NSRect(x: content.minX, y: content.minY - 2,
-                             width: content.width, height: 16)
-        openSessionsRect = rowRect
-        drawText("OPEN SESSIONS →", at: NSPoint(x: content.minX, y: rowRect.minY - 11),
+        let limitsHeight = Self.measure("LIMITS ›", font: labelFont)
+        let limitsRect = NSRect(x: content.minX + 148, y: content.minY - 2,
+                                width: limitsHeight + 8, height: 16)
+        openLimitsRect = limitsRect
+        drawText("LIMITS ›", at: NSPoint(x: limitsRect.minX,
+                                        y: limitsRect.minY - 11),
+                 font: labelFont, color: Palette.secondary,
+                 alignment: .left, width: limitsRect.width)
+
+        let sessionsRect = NSRect(x: content.minX, y: content.minY - 2,
+                                  width: 140, height: 16)
+        openSessionsRect = sessionsRect
+        drawText("OPEN SESSIONS →", at: NSPoint(x: sessionsRect.minX,
+                                               y: sessionsRect.minY - 11),
+                 font: labelFont, color: Palette.secondary,
+                 alignment: .left, width: sessionsRect.width)
+    }
+
+    private func drawLimitsPage() {
+        let content = bounds.insetBy(dx: padding, dy: padding)
+        var y = content.maxY - 2
+
+        let headerRect = NSRect(x: content.minX, y: y - 14,
+                                width: content.width, height: 16)
+        backRect = headerRect
+        drawText("LIMITS", at: NSPoint(x: content.minX, y: y - 13),
                  font: labelFont, color: Palette.secondary,
                  alignment: .left, width: content.width)
+        drawText("‹ BACK", at: NSPoint(x: content.minX, y: y - 13),
+                 font: labelFont, color: Palette.orange,
+                 alignment: .right, width: content.width)
+        y -= 26
+
+        Palette.divider.setFill()
+        NSRect(x: content.minX, y: y, width: content.width, height: 1).fill()
+        y -= 14
+
+        drawText("alert when metric exceeds", at: NSPoint(x: content.minX, y: y - 10),
+                 font: detailFont, color: Palette.tertiary,
+                 alignment: .left, width: content.width)
+        y -= 20
+
+        if let cpuAlert = alertLine(.cpu) {
+            drawText(cpuAlert.text, at: NSPoint(x: content.minX, y: y - 10),
+                     font: detailFont,
+                     color: cpuAlert.severity == .red ? Palette.red : Palette.orange,
+                     alignment: .left, width: content.width)
+            y -= 20
+        } else {
+            y -= 4
+        }
+
+        let rows: [(ThresholdKind, String, String?)] = [
+            (.cpu, "CPU", "load per core · presets 70–95%"),
+            (.mem, "MEM", "used / total RAM · presets 80–95%"),
+            (.gpu, "GPU", "utilization · presets 60–95%"),
+        ]
+        for (kind, title, note) in rows {
+            let rowRect = NSRect(x: content.minX, y: y - 34,
+                                 width: content.width, height: 36)
+            limitRowRects.append((kind, rowRect))
+
+            drawText(title, at: NSPoint(x: content.minX, y: y - 12),
+                     font: valueFont, color: Palette.primary,
+                     alignment: .left, width: content.width)
+            drawText("≥ \(thresholds.percent(for: kind))%",
+                     at: NSPoint(x: content.minX, y: y - 13),
+                     font: valueFont, color: Palette.orange,
+                     alignment: .right, width: content.width)
+            if let note {
+                drawText(note, at: NSPoint(x: content.minX, y: y - 27),
+                         font: detailFont, color: Palette.tertiary,
+                         alignment: .left, width: content.width)
+            }
+            y -= 46
+        }
+
+        drawText("tap to cycle preset", at: NSPoint(x: content.minX, y: content.minY - 10),
+                 font: detailFont, color: Palette.tertiary,
+                 alignment: .left, width: content.width - 100)
     }
     private func drawQuit() {
         let content = bounds.insetBy(dx: padding, dy: padding)
@@ -158,8 +263,12 @@ public final class PanelView: NSView {
                  alignment: .right, width: rect.width)
     }
 
+    private func alertLine(_ kind: ThresholdKind) -> AlertLine? {
+        alerts.first { $0.metric == kind }
+    }
+
     private func drawMetric(title: String, value: String, detail: String?,
-                            fraction: Double?, y: CGFloat) -> CGFloat {
+                            fraction: Double?, alert: AlertLine?, y: CGFloat) -> CGFloat {
         let content = bounds.insetBy(dx: padding, dy: padding)
         var cursor = y
 
@@ -178,7 +287,13 @@ public final class PanelView: NSView {
             cursor -= 12
         }
 
-        if let detail {
+        if let alert {
+            drawText(alert.text, at: NSPoint(x: content.minX, y: cursor - 11),
+                     font: detailFont,
+                     color: alert.severity == .red ? Palette.red : Palette.orange,
+                     alignment: .left, width: content.width)
+            cursor -= 15
+        } else if let detail {
             drawText(detail, at: NSPoint(x: content.minX, y: cursor - 11),
                      font: detailFont, color: Palette.tertiary,
                      alignment: .left, width: content.width)

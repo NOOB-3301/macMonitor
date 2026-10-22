@@ -20,6 +20,7 @@ public final class NotchController {
     private var localMonitor: Any?
     private var resignObserver: NSObjectProtocol?
     private var scanner: SessionScanner?
+    private let thresholdStore = ThresholdStore()
 
     public init(scanner: SessionScanner? = nil) {
         self.scanner = scanner
@@ -92,9 +93,15 @@ public final class NotchController {
         }
     }
 
-    public func update(_ snapshot: Snapshot, _ claude: ClaudeUsage) {
+    public func currentThresholds() -> Thresholds {
+        thresholdStore.current()
+    }
+
+    public func update(_ snapshot: Snapshot, _ claude: ClaudeUsage,
+                       alerts: [AlertLine] = []) {
         guard isVisible, let view else { return }
-        view.update(snapshot: snapshot, claude: claude)
+        view.update(snapshot: snapshot, claude: claude,
+                    alerts: alerts, thresholds: thresholdStore.current())
     }
 
     private func setMode(_ mode: PanelMode, sessions: [RunningSession]) {
@@ -106,6 +113,10 @@ public final class NotchController {
         case .openSessions:
             setMode(.sessions, sessions: [])
             refreshSessions()
+        case .openLimits:
+            setMode(.limits, sessions: [])
+        case .cycleLimit(let kind):
+            _ = thresholdStore.cycle(kind)
         case .back:
             setMode(.metrics, sessions: [])
         case .focus(let pid):
