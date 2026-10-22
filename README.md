@@ -19,6 +19,24 @@ No history, no charts, no daemon: one `LSUIElement` process, one run loop, no IP
 1. Open **System Settings** → **General** → **Login Items & Extensions**.
 2. Under **Open at Login**, click **+** and select `Applications/macmon.app`.
 
+### Screenshots
+1. Menubar Item
+<img width="87" height="37" alt="image" src="https://github.com/user-attachments/assets/c2dd6fad-793c-4994-8d03-c2784d10a4cd" />
+</br>
+</br>
+
+2. Window 1 (shows stats and claude usage)
+<img width="352" height="462" alt="image" src="https://github.com/user-attachments/assets/ff78a4e7-c151-4945-8597-629643618a22" />
+</br>
+3. Window 2 (shows currently active sessions, opens vscode or terminal where that session is running)
+<img width="353" height="456" alt="image" src="https://github.com/user-attachments/assets/b574b582-a936-426c-9ce6-c413096cb3d5" />
+</br>
+  
+4. Window 3 (Limit for shwoing intensive apps , when they cross this threshhold it shows in main window)
+<img width="349" height="463" alt="image" src="https://github.com/user-attachments/assets/d51bf468-a5a0-4f8d-987f-3ba1bdc88474" />
+</br>
+
+## Scripts
 | Action | Command |
 |---|---|
 | Install, update, or reinstall | `./scripts/install.sh` |
