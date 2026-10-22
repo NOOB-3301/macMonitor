@@ -29,7 +29,7 @@ No history, no charts, no daemon: one `LSUIElement` process, one run loop, no IP
 <img width="352" height="462" alt="image" src="https://github.com/user-attachments/assets/ff78a4e7-c151-4945-8597-629643618a22" />
 </br>
 3. Window 2 (shows currently active sessions, opens vscode or terminal where that session is running)
-<img width="353" height="456" alt="image" src="https://github.com/user-attachments/assets/b574b582-a936-426c-9ce6-c413096cb3d5" />
+<img width="356" height="464" alt="image" src="https://github.com/user-attachments/assets/d265faa1-cde4-4376-a17f-a98031bc81f5" />
 </br>
   
 4. Window 3 (Limit for shwoing intensive apps , when they cross this threshhold it shows in main window)
