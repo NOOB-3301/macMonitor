@@ -22,6 +22,8 @@ public struct ClaudeUsage: Sendable {
     public var stale: Bool
     public var localTokens: Int?
     public var failureReason: String?
+    public var projection: UsageProjection.FiveHour?
+    public var weeklyText: String?
 
     public init(fiveHour: Double? = nil, fiveHourReset: Date? = nil,
                 sevenDay: Double? = nil, sevenDayReset: Date? = nil,
@@ -29,7 +31,9 @@ public struct ClaudeUsage: Sendable {
                 extraUsed: Double? = nil, extraLimit: Double? = nil,
                 plan: String? = nil, fetchedAt: Date? = nil,
                 source: Source = .none, stale: Bool = true,
-                localTokens: Int? = nil, failureReason: String? = nil) {
+                localTokens: Int? = nil, failureReason: String? = nil,
+                projection: UsageProjection.FiveHour? = nil,
+                weeklyText: String? = nil) {
         self.fiveHour = fiveHour
         self.fiveHourReset = fiveHourReset
         self.sevenDay = sevenDay
@@ -44,6 +48,8 @@ public struct ClaudeUsage: Sendable {
         self.stale = stale
         self.localTokens = localTokens
         self.failureReason = failureReason
+        self.projection = projection
+        self.weeklyText = weeklyText
     }
 
     public var hasData: Bool {

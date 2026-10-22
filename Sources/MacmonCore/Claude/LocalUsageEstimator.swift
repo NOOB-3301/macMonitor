@@ -1,11 +1,16 @@
 import Foundation
 
+private let estimatorQueueLabel: String = {
+    let identifier = Bundle.main.bundleIdentifier ?? "dev.arkab.macmon"
+    return "\(identifier).jsonl"
+}()
+
 public final class LocalUsageEstimator {
     private struct State: Codable {
         var offsets: [String: UInt64] = [:]
     }
 
-    private static let queue = DispatchQueue(label: "dev.arkab.macmon.jsonl",
+    private static let queue = DispatchQueue(label: estimatorQueueLabel,
                                              qos: .utility)
     private static let window: TimeInterval = 5 * 3600 + 900
     private static let firstRunTail: UInt64 = 8 * 1024 * 1024

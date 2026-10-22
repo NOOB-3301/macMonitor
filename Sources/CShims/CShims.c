@@ -2,6 +2,7 @@
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/IOKitLib.h>
+#include <libproc.h>
 #include <mach/mach.h>
 #include <mach/mach_host.h>
 #include <mach/processor_info.h>
@@ -10,11 +11,14 @@
 #include <net/if.h>
 #include <net/if_var.h>
 #include <ifaddrs.h>
-#include <stdio.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
+#include <sys/proc_info.h>
 #include <sys/sysctl.h>
+#include <sys/syslimits.h>
 #include <sys/types.h>
+#include <sys/unistd.h>
 
 static int mm_debug_enabled(void) {
     return getenv("MM_DEBUG") != NULL;
@@ -410,4 +414,281 @@ void mm_load_avg(double *a, double *b, double *c) {
     *a = load[0];
     *b = load[1];
     *c = load[2];
+}
+
+static void mm_session_copy_argc_args(const char *buffer, size_t size,
+                                      char *exec_path, size_t exec_size,
+                                      char *argv, size_t argv_size) {
+    exec_path[0] = 0;
+    argv[0] = 0;
+    if (size < 5) return;
+
+    int32_t argc = 0;
+    memcpy(&argc, buffer, sizeof(argc));
+    if (argc <= 0 || argc > 4096) return;
+
+    const char *p = buffer + sizeof(int32_t);
+    const char *end = buffer + size;
+
+    size_t len = strnlen(p, (size_t)(end - p)) + 1;
+    if (p + len > end) return;
+    strncpy(exec_path, p, exec_size - 1);
+    exec_path[exec_size - 1] = 0;
+    p += len;
+
+    while (p < end && *p == 0) p++;
+
+    size_t used = 0;
+    int consumed = 0;
+    while (p < end && consumed < argc) {
+        size_t s = strnlen(p, (size_t)(end - p));
+        if (p + s + 1 > end) break;
+        if (s == 0) break;
+        if (consumed > 0 && used + 1 < argv_size) {
+            argv[used++] = ' ';
+        }
+        if (used + s >= argv_size) break;
+        memcpy(argv + used, p, s);
+        used += s;
+        argv[used] = 0;
+        p += s + 1;
+        consumed++;
+    }
+}
+
+int mm_session_procs(mm_proc_session *out, int max) {
+    int count = proc_listallpids(NULL, 0);
+    if (count <= 0) return 0;
+
+    size_t pids_size = (size_t)(count + 64) * sizeof(pid_t);
+    pid_t *pids = malloc(pids_size);
+    if (!pids) return 0;
+
+    int total = proc_listallpids(pids, (int)pids_size);
+    if (total <= 0) {
+        free(pids);
+        return 0;
+    }
+
+    size_t args_size = 65536;
+    char *args = malloc(args_size);
+    if (!args) {
+        free(pids);
+        return 0;
+    }
+
+    int n = 0;
+    for (int i = 0; i < total && n < max; i++) {
+        char path[1024];
+        if (proc_pidpath(pids[i], path, sizeof(path)) <= 0) continue;
+        const char *kind_name = NULL;
+        if (strstr(path, "/claude") != NULL || strstr(path, "/.claude") != NULL) {
+            kind_name = "claude";
+        } else if (strstr(path, "/opencode") != NULL) {
+            kind_name = "opencode";
+        } else {
+            char name[64];
+            if (proc_name(pids[i], name, sizeof(name)) <= 0) continue;
+            if (strstr(name, "claude") == NULL &&
+                strstr(name, "opencode") == NULL) {
+                continue;
+            }
+            kind_name = strstr(name, "claude") != NULL ? "claude" : "opencode";
+        }
+
+        mm_proc_session *entry = &out[n];
+        memset(entry, 0, sizeof(*entry));
+        entry->pid = pids[i];
+        strncpy(entry->name, kind_name, sizeof(entry->name) - 1);
+        strncpy(entry->path, path, sizeof(entry->path) - 1);
+
+        int mib[3] = {CTL_KERN, KERN_PROCARGS2, pids[i]};
+        size_t wanted = args_size;
+        if (sysctl(mib, 3, args, &wanted, NULL, 0) == 0) {
+            mm_session_copy_argc_args(args, wanted, entry->path,
+                                      sizeof(entry->path), entry->argv,
+                                      sizeof(entry->argv));
+        }
+
+        struct proc_vnodepathinfo vpi;
+        int r = proc_pidinfo(pids[i], PROC_PIDVNODEPATHINFO, 0, &vpi,
+                             (int)sizeof(vpi));
+        if (r > 0) {
+            strncpy(entry->cwd, vpi.pvi_cdir.vip_path, sizeof(entry->cwd) - 1);
+        }
+
+        struct kinfo_proc kp;
+        memset(&kp, 0, sizeof(kp));
+        int mib2[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, pids[i]};
+        size_t kp_size = sizeof(kp);
+        if (sysctl(mib2, 4, &kp, &kp_size, NULL, 0) == 0 && kp_size > 0) {
+            dev_t tdev = kp.kp_eproc.e_tdev;
+            if (tdev != NODEV && tdev != 0) {
+                char devbuf[64];
+                if (devname_r(tdev, S_IFCHR, devbuf, (int)sizeof(devbuf)) != NULL) {
+                    strncpy(entry->tty, devbuf, sizeof(entry->tty) - 1);
+                    entry->tty_valid = 1;
+                }
+            }
+        }
+
+        n++;
+    }
+
+    free(args);
+    free(pids);
+    return n;
+}
+
+#include <dlfcn.h>
+
+typedef struct sqlite3 sqlite3;
+typedef struct sqlite3_stmt sqlite3_stmt;
+
+typedef int (*sqlite3_open_v2_fn)(const char *, sqlite3 **, int, const char *);
+typedef int (*sqlite3_prepare_v2_fn)(sqlite3 *, const char *, int,
+                                     sqlite3_stmt **, const char **);
+typedef int (*sqlite3_bind_text_fn)(sqlite3_stmt *, int, const char *, int,
+                                    void (*)(void *));
+typedef int (*sqlite3_step_fn)(sqlite3_stmt *);
+typedef const unsigned char *(*sqlite3_column_text_fn)(sqlite3_stmt *, int);
+typedef int (*sqlite3_finalize_fn)(sqlite3_stmt *);
+typedef int (*sqlite3_close_fn)(sqlite3 *);
+typedef const char *(*sqlite3_errmsg_fn)(sqlite3 *);
+
+static void *mm_sqlite_lib = NULL;
+static sqlite3 *mm_sqlite_handle = NULL;
+static char mm_sqlite_path[1024] = {0};
+
+#define MM_SQLITE_OPEN_READONLY 0x00000001
+#define MM_SQLITE_OPEN_URI 0x00000040
+#define MM_SQLITE_ROW 100
+#define MM_SQLITE_OK 0
+
+static int mm_sqlite_lookup(void) {
+    if (mm_sqlite_lib) return 1;
+    mm_sqlite_lib = dlopen("libsqlite3.dylib", RTLD_LAZY);
+    if (!mm_sqlite_lib) return 0;
+    if (!dlsym(mm_sqlite_lib, "sqlite3_open_v2") ||
+        !dlsym(mm_sqlite_lib, "sqlite3_prepare_v2") ||
+        !dlsym(mm_sqlite_lib, "sqlite3_bind_text") ||
+        !dlsym(mm_sqlite_lib, "sqlite3_step") ||
+        !dlsym(mm_sqlite_lib, "sqlite3_column_text") ||
+        !dlsym(mm_sqlite_lib, "sqlite3_finalize") ||
+        !dlsym(mm_sqlite_lib, "sqlite3_close") ||
+        !dlsym(mm_sqlite_lib, "sqlite3_errmsg")) {
+        dlclose(mm_sqlite_lib);
+        mm_sqlite_lib = NULL;
+        return 0;
+    }
+    return 1;
+}
+
+static void mm_sqlite_seterr(sqlite3 *db, char *errbuf, int errsize) {
+    if (!errbuf || errsize <= 0) return;
+    errbuf[0] = 0;
+    if (!mm_sqlite_lib || !db) return;
+    sqlite3_errmsg_fn errmsg = (sqlite3_errmsg_fn)dlsym(mm_sqlite_lib, "sqlite3_errmsg");
+    if (!errmsg) return;
+    const char *msg = errmsg(db);
+    if (msg) {
+        strncpy(errbuf, msg, (size_t)errsize - 1);
+        errbuf[errsize - 1] = 0;
+    }
+}
+
+static void mm_sqlite_copy_col(sqlite3_stmt *stmt, int col, char *dst, size_t size,
+                               sqlite3_column_text_fn coltext) {
+    const unsigned char *text = coltext(stmt, col);
+    if (!text) {
+        dst[0] = 0;
+        return;
+    }
+    strncpy(dst, (const char *)text, size - 1);
+    dst[size - 1] = 0;
+}
+
+int mm_db_sessions(const char *path, const char *const *ids, int nkeys,
+                   mm_db_session *out, int max, char *errbuf, int errsize) {
+    if (errbuf && errsize > 0) errbuf[0] = 0;
+    if (!path || nkeys > max || nkeys <= 0) return -1;
+    if (!mm_sqlite_lookup()) {
+        if (errbuf && errsize > 0) {
+            strncpy(errbuf, "sqlite unavailable", (size_t)errsize - 1);
+            errbuf[errsize - 1] = 0;
+        }
+        return -1;
+    }
+
+    if (mm_sqlite_handle && strcmp(path, mm_sqlite_path) != 0) {
+        sqlite3_close_fn closefn = (sqlite3_close_fn)dlsym(mm_sqlite_lib, "sqlite3_close");
+        if (closefn) closefn(mm_sqlite_handle);
+        mm_sqlite_handle = NULL;
+    }
+
+    if (!mm_sqlite_handle) {
+        char uri[1152];
+        snprintf(uri, sizeof(uri), "file:%s?mode=ro", path);
+        sqlite3_open_v2_fn openfn = (sqlite3_open_v2_fn)dlsym(mm_sqlite_lib, "sqlite3_open_v2");
+        if (!openfn) return -1;
+        int rc = openfn(uri, &mm_sqlite_handle,
+                        MM_SQLITE_OPEN_READONLY | MM_SQLITE_OPEN_URI, NULL);
+        if (rc != MM_SQLITE_OK) {
+            mm_sqlite_seterr(mm_sqlite_handle, errbuf, errsize);
+            if (mm_sqlite_handle) {
+                sqlite3_close_fn closefn = (sqlite3_close_fn)dlsym(mm_sqlite_lib, "sqlite3_close");
+                if (closefn) closefn(mm_sqlite_handle);
+                mm_sqlite_handle = NULL;
+            }
+            return -1;
+        }
+        strncpy(mm_sqlite_path, path, sizeof(mm_sqlite_path) - 1);
+    }
+
+    const char *sql = "SELECT directory, title FROM session WHERE id = ?";
+    sqlite3_prepare_v2_fn prepare = (sqlite3_prepare_v2_fn)dlsym(mm_sqlite_lib, "sqlite3_prepare_v2");
+    sqlite3_bind_text_fn bindtext = (sqlite3_bind_text_fn)dlsym(mm_sqlite_lib, "sqlite3_bind_text");
+    sqlite3_step_fn stepfn = (sqlite3_step_fn)dlsym(mm_sqlite_lib, "sqlite3_step");
+    sqlite3_column_text_fn coltext = (sqlite3_column_text_fn)dlsym(mm_sqlite_lib, "sqlite3_column_text");
+    sqlite3_finalize_fn finalize = (sqlite3_finalize_fn)dlsym(mm_sqlite_lib, "sqlite3_finalize");
+    if (!prepare || !bindtext || !stepfn || !coltext || !finalize) return -1;
+
+    sqlite3_stmt *stmt = NULL;
+    if (prepare(mm_sqlite_handle, sql, -1, &stmt, NULL) != MM_SQLITE_OK) {
+        mm_sqlite_seterr(mm_sqlite_handle, errbuf, errsize);
+        return -1;
+    }
+
+    int n = 0;
+    for (int i = 0; i < nkeys; i++) {
+        mm_db_session *entry = &out[i];
+        memset(entry, 0, sizeof(*entry));
+        if (!ids[i]) continue;
+        strncpy(entry->id, ids[i], sizeof(entry->id) - 1);
+        if (ids[i][0] == 0) continue;
+
+        bindtext(stmt, 1, ids[i], -1, NULL);
+        int rc = stepfn(stmt);
+        if (rc == MM_SQLITE_ROW) {
+            mm_sqlite_copy_col(stmt, 0, entry->dir, sizeof(entry->dir), coltext);
+            mm_sqlite_copy_col(stmt, 1, entry->title, sizeof(entry->title), coltext);
+            entry->found = 1;
+        }
+        n++;
+    }
+    bindtext(stmt, 1, "", -1, NULL);
+    finalize(stmt);
+    return n;
+}
+
+void mm_db_close(void) {
+    if (mm_sqlite_lib && mm_sqlite_handle) {
+        sqlite3_close_fn closefn = (sqlite3_close_fn)dlsym(mm_sqlite_lib, "sqlite3_close");
+        if (closefn) closefn(mm_sqlite_handle);
+    }
+    mm_sqlite_handle = NULL;
+    if (mm_sqlite_lib) {
+        dlclose(mm_sqlite_lib);
+        mm_sqlite_lib = NULL;
+    }
 }

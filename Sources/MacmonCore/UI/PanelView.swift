@@ -1,7 +1,19 @@
 import AppKit
 
+public enum PanelMode: Equatable {
+    case metrics
+    case sessions
+}
+
 public final class PanelView: NSView {
-    public static let size = NSSize(width: 344, height: 436)
+    public enum PanelAction: Equatable {
+        case openSessions
+        case back
+        case focus(pid: Int32)
+        case quit
+    }
+
+    public static let size = NSSize(width: 344, height: 456)
 
     private enum Palette {
         static let primary = NSColor(calibratedRed: 0.97, green: 0.98, blue: 1.00, alpha: 1)
@@ -17,13 +29,29 @@ public final class PanelView: NSView {
 
     private var snapshot = Snapshot()
     private var claude = ClaudeUsage()
+    private var mode: PanelMode = .metrics
+    private var sessions: [RunningSession] = []
+
+    private var openSessionsRect: NSRect?
+    private var backRect: NSRect?
+    private var quitRect: NSRect?
+    private var rowRects: [NSRect] = []
 
     private let padding: CGFloat = 16
     private let labelFont = NSFont.systemFont(ofSize: 10.5, weight: .bold)
     private let valueFont = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
     private let detailFont = NSFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .regular)
+    private let rowFont = NSFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .medium)
 
     public override var isFlipped: Bool { false }
+
+    public var currentMode: PanelMode { mode }
+
+    public func setMode(_ mode: PanelMode, sessions: [RunningSession]) {
+        self.mode = mode
+        self.sessions = sessions
+        needsDisplay = true
+    }
 
     public func update(snapshot: Snapshot, claude: ClaudeUsage) {
         self.snapshot = snapshot
@@ -31,7 +59,42 @@ public final class PanelView: NSView {
         needsDisplay = true
     }
 
+    public func action(at point: NSPoint) -> PanelAction? {
+        if let rect = quitRect, rect.contains(point) {
+            return .quit
+        }
+        switch mode {
+        case .metrics:
+            if let rect = openSessionsRect, rect.contains(point) {
+                return .openSessions
+            }
+        case .sessions:
+            if let rect = backRect, rect.contains(point) {
+                return .back
+            }
+            for (index, rect) in rowRects.enumerated() where rect.contains(point) {
+                guard index < sessions.count else { break }
+                return .focus(pid: sessions[index].pid)
+            }
+        }
+        return nil
+    }
+
     public override func draw(_ dirtyRect: NSRect) {
+        openSessionsRect = nil
+        backRect = nil
+        quitRect = nil
+        rowRects = []
+        switch mode {
+        case .metrics:
+            drawMetricsPage()
+        case .sessions:
+            drawSessionsPage()
+        }
+        drawQuit()
+    }
+
+    private func drawMetricsPage() {
         let content = bounds.insetBy(dx: padding, dy: padding)
         var y = content.maxY - 2
 
@@ -76,7 +139,23 @@ public final class PanelView: NSView {
         NSRect(x: content.minX, y: y, width: content.width, height: 1).fill()
         y -= 14
 
-        drawClaude(from: y)
+        _ = drawClaude(from: y)
+
+        let rowRect = NSRect(x: content.minX, y: content.minY - 2,
+                             width: content.width, height: 16)
+        openSessionsRect = rowRect
+        drawText("OPEN SESSIONS →", at: NSPoint(x: content.minX, y: rowRect.minY - 11),
+                 font: labelFont, color: Palette.secondary,
+                 alignment: .left, width: content.width)
+    }
+    private func drawQuit() {
+        let content = bounds.insetBy(dx: padding, dy: padding)
+        let rect = NSRect(x: content.maxX - 90, y: content.minY - 2,
+                          width: 90, height: 16)
+        quitRect = rect
+        drawText("QUIT", at: NSPoint(x: rect.minX, y: rect.minY - 11),
+                 font: labelFont, color: Palette.red,
+                 alignment: .right, width: rect.width)
     }
 
     private func drawMetric(title: String, value: String, detail: String?,
@@ -109,7 +188,7 @@ public final class PanelView: NSView {
         return cursor - 8
     }
 
-    private func drawClaude(from y: CGFloat) {
+    private func drawClaude(from y: CGFloat) -> CGFloat {
         let content = bounds.insetBy(dx: padding, dy: padding)
         var cursor = y
 
@@ -136,6 +215,8 @@ public final class PanelView: NSView {
             title: "5 hour",
             utilization: claude.fiveHour,
             reset: claude.fiveHourReset,
+            projection: claude.projection,
+            weeklyText: nil,
             y: cursor,
             width: content.width,
             x: content.minX
@@ -144,6 +225,8 @@ public final class PanelView: NSView {
             title: "weekly",
             utilization: claude.sevenDay,
             reset: claude.sevenDayReset,
+            projection: nil,
+            weeklyText: claude.weeklyText,
             y: cursor,
             width: content.width,
             x: content.minX
@@ -163,9 +246,12 @@ public final class PanelView: NSView {
                      font: detailFont, color: Palette.tertiary,
                      alignment: .left, width: content.width)
         }
+        return cursor
     }
 
     private func drawClaudeWindow(title: String, utilization: Double?, reset: Date?,
+                                  projection: UsageProjection.FiveHour?,
+                                  weeklyText: String?,
                                   y: CGFloat, width: CGFloat, x: CGFloat) -> CGFloat {
         var cursor = y
         let value = utilization.map { Format.percent($0) } ?? "--"
@@ -184,7 +270,17 @@ public final class PanelView: NSView {
         }
         cursor -= 11
 
-        if let reset {
+        if let projection {
+            drawText(projection.text, at: NSPoint(x: x, y: cursor - 10),
+                     font: detailFont, color: roleColor(projection.role),
+                     alignment: .left, width: width)
+            cursor -= 13
+        } else if let weeklyText {
+            drawText(weeklyText, at: NSPoint(x: x, y: cursor - 10),
+                     font: detailFont, color: Palette.tertiary,
+                     alignment: .left, width: width)
+            cursor -= 13
+        } else if let reset {
             let remaining = reset.timeIntervalSinceNow
             let suffix = remaining > 0 ? "resets in \(Format.countdown(remaining))" : "reset"
             drawText(suffix, at: NSPoint(x: x, y: cursor - 10),
@@ -193,6 +289,81 @@ public final class PanelView: NSView {
             cursor -= 13
         }
         return cursor - 5
+    }
+
+    private func drawSessionsPage() {
+        let content = bounds.insetBy(dx: padding, dy: padding)
+        var y = content.maxY - 2
+
+        let headerRect = NSRect(x: content.minX, y: y - 14,
+                                width: content.width, height: 16)
+        backRect = headerRect
+        drawText("SESSIONS", at: NSPoint(x: content.minX, y: y - 13),
+                 font: labelFont, color: Palette.secondary,
+                 alignment: .left, width: content.width)
+        drawText("‹ BACK", at: NSPoint(x: content.minX, y: y - 13),
+                 font: labelFont, color: Palette.orange,
+                 alignment: .right, width: content.width)
+        y -= 26
+
+        Palette.divider.setFill()
+        NSRect(x: content.minX, y: y, width: content.width, height: 1).fill()
+        y -= 12
+
+        guard !sessions.isEmpty else {
+            drawText("no sessions running",
+                     at: NSPoint(x: content.minX, y: y - 11),
+                     font: detailFont, color: Palette.tertiary,
+                     alignment: .left, width: content.width)
+            return
+        }
+
+        let maxRows = 12
+        let visible = sessions.prefix(maxRows)
+        for session in visible {
+            let rowRect = NSRect(x: content.minX, y: y - 15,
+                                 width: content.width, height: 17)
+            rowRects.append(rowRect)
+
+            let dot = NSRect(x: content.minX, y: y - 11, width: 6, height: 6)
+            (session.kind == .claude ? Palette.orange : Palette.green).setFill()
+            NSBezierPath(roundedRect: dot, xRadius: 1, yRadius: 1).fill()
+
+            let textX = content.minX + 12
+            let textWidth = content.width - 12
+            let labelText = session.kind == .claude ? "claude  " : "oc  "
+            let labelWidth = Self.measure(labelText, font: detailFont)
+            drawText(labelText,
+                     at: NSPoint(x: textX, y: y - 14),
+                     font: detailFont,
+                     color: session.kind == .claude ? Palette.orange : Palette.green,
+                     alignment: .left, width: textWidth)
+            drawText(Self.leaf(session),
+                     at: NSPoint(x: textX + labelWidth, y: y - 14),
+                     font: rowFont, color: Palette.primary,
+                     alignment: .left, width: textWidth - labelWidth - 52)
+            drawText(session.tty,
+                     at: NSPoint(x: textX, y: y - 14),
+                     font: detailFont, color: Palette.tertiary,
+                     alignment: .right, width: textWidth)
+            y -= 20
+        }
+
+        if sessions.count > maxRows {
+            drawText("… \(sessions.count - maxRows) more",
+                     at: NSPoint(x: content.minX, y: y - 11),
+                     font: detailFont, color: Palette.tertiary,
+                     alignment: .left, width: content.width)
+        }
+    }
+
+    private static func measure(_ string: String, font: NSFont) -> CGFloat {
+        (string as NSString).size(withAttributes: [.font: font]).width
+    }
+
+    private static func leaf(_ session: RunningSession) -> String {
+        session.directory.map { ($0 as NSString).lastPathComponent }
+            ?? (session.cwd as NSString).lastPathComponent
     }
 
     private func drawText(_ string: String, at point: NSPoint, font: NSFont,
@@ -230,6 +401,15 @@ public final class PanelView: NSView {
         if fraction >= 0.75 { return Palette.orange }
         if fraction >= 0.55 { return Palette.yellow }
         return Palette.green
+    }
+
+    private func roleColor(_ role: UsageProjection.Role) -> NSColor {
+        switch role {
+        case .green: return Palette.green
+        case .yellow: return Palette.yellow
+        case .orange: return Palette.orange
+        case .red: return Palette.red
+        }
     }
 
     private func temperatureValue() -> String {

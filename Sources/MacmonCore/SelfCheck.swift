@@ -38,8 +38,89 @@ public enum SelfCheck {
         near("panel tall x", tallOrigin.x, 720 - PanelView.size.width / 2)
         near("panel tall y", tallOrigin.y, 868 - 8 - PanelView.size.height)
 
+        let now = Date()
+        let resetsAt = now.addingTimeInterval(3600)
+        let exhausted = UsageProjection.fiveHour(util: 100, resetsAt: resetsAt,
+                                                 samples: [], now: now)
+        equal("projection exhausted", exhausted.text, "exhausted · resets 1h 0m")
+        if exhausted.role != .red {
+            failures += 1
+            print("FAIL projection exhausted role")
+        }
+
+        let runout = UsageProjection.fiveHour(util: 60,
+                                              resetsAt: now.addingTimeInterval(600),
+                                              samples: [(40, now.addingTimeInterval(-600)),
+                                                        (60, now)],
+                                              now: now)
+        if !runout.text.hasPrefix("runout ~") {
+            failures += 1
+            print("FAIL projection runout text: \(runout.text)")
+        }
+        if runout.role != .orange {
+            failures += 1
+            print("FAIL projection runout role")
+        }
+
+        let idle = UsageProjection.fiveHour(util: 55,
+                                            resetsAt: resetsAt,
+                                            samples: [(55, now.addingTimeInterval(-1500)),
+                                                      (55, now.addingTimeInterval(-1200))],
+                                            now: now)
+        equal("projection idle", idle.text, "idle · resets 1h 0m")
+        if idle.role != .green {
+            failures += 1
+            print("FAIL projection idle role")
+        }
+
+        let onPace = UsageProjection.fiveHour(util: 20, resetsAt: resetsAt,
+                                              samples: [], now: now)
+        equal("projection on pace fallback", onPace.text, "on pace · resets 1h 0m")
+        if onPace.role != .green {
+            failures += 1
+            print("FAIL projection on pace role")
+        }
+        let hotPace = UsageProjection.fiveHour(util: 60, resetsAt: resetsAt,
+                                               samples: [(40, now.addingTimeInterval(-600)),
+                                                         (60, now)],
+                                               now: now)
+        equal("projection hot pace", hotPace.text, "hot pace · throttle likely")
+        if hotPace.role != .yellow {
+            failures += 1
+            print("FAIL projection hot pace role")
+        }
+
+        let weekly = UsageProjection.weeklyText(
+            util: 52,
+            resetsAt: Calendar.current.date(byAdding: .hour,
+                                            value: 1, to: now),
+            now: now) ?? ""
+        if !weekly.hasPrefix("52% used · resets ") {
+            failures += 1
+            print("FAIL projection weekly: \(weekly)")
+        }
+        let weeklyNoReset = UsageProjection.weeklyText(util: 52, resetsAt: nil, now: now) ?? ""
+        equal("projection weekly no reset", weeklyNoReset, "52% used")
+
+        if Self.sessionIDParse("claude -s ses_abc123 --foo") != "ses_abc123" {
+            failures += 1
+            print("FAIL session id parse -s")
+        }
+        if Self.sessionIDParse("opencode --resume ses_def456") != "ses_def456" {
+            failures += 1
+            print("FAIL session id parse --resume")
+        }
+        if Self.sessionIDParse("claude --continue") != nil {
+            failures += 1
+            print("FAIL session id parse nil")
+        }
+
         print(failures == 0 ? "selftest: ok" : "selftest: \(failures) failures")
         return failures == 0 ? 0 : 1
+    }
+
+    private static func sessionIDParse(_ argv: String) -> String? {
+        SessionScanner.sessionID(in: argv)
     }
 
     private static func near(_ name: String, _ actual: Double, _ expected: Double,

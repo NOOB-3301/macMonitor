@@ -130,6 +130,27 @@ First Keychain read prompts once. Choose **Always Allow**. Rebuilding with an ad
 - **Keychain** — read-only access to the Claude Code credentials item, as above.
 - Nothing else. No screen recording, no input monitoring beyond the click monitor, no network access other than the usage endpoint.
 
+## Claude usage panel
+
+The Claude section never re-reads the Keychain on a timer: credentials are read
+once per app lifecycle and only re-read after a 401/403 or when the cached token
+is within 60 s of expiry (capped at three forced reloads per lifecycle).
+
+Under the 5-hour bar a projection line summarizes the trend from the last 30
+minutes of utilization samples: `exhausted` (red), `runout ~… before reset`
+(orange), `hot pace · throttle likely` (yellow, > 25 %/h), `idle · resets …`
+(green) or `on pace · resets …` (green). The weekly bar shows
+`N% used · resets <day time>`.
+
+### Open sessions
+
+`OPEN SESSIONS →` on the metrics page opens a session list: running `claude` /
+`opencode` processes with their terminal tty and working directory. `opencode`
+rows are enriched with title/directory from the local `opencode.db`
+(read-only, loaded via dlopen only while the page is open). Clicking a row
+focuses the terminal tab (iTerm2 or Terminal) via that tty, falling back to
+opening the directory in Finder.
+
 ## Memory and footprint
 
 Measured on a MacBook Air M5 (16 GB, macOS 26.4), one minute after launch with the panel closed, installed as a LaunchAgent:
@@ -153,7 +174,9 @@ swift build -c release
 .build/release/MacmonApp --selftest   # pure math/format/geometry checks
 .build/release/MacmonApp --probe      # one-shot sensor dump incl. Claude
 .build/release/MacmonApp --geometry   # screen, notch rect, trigger rect
-.build/release/MacmonApp --render /tmp/panel.png   # render the panel to PNG
+.build/release/MacmonApp --render /tmp/panel.png   # render the metrics page to PNG
+.build/release/MacmonApp --render-sessions /tmp/sessions.png   # render the sessions page to PNG
+.build/release/MacmonApp --sessions   # print running claude/opencode sessions
 MM_DEBUG=1 .build/release/MacmonApp --probe   # verbose SMC discovery/values
 MACMON_DEMO=1 .build/release/MacmonApp        # open the panel after 1.5 s
 ```

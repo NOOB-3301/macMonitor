@@ -3,7 +3,13 @@ import AppKit
 public final class AppDelegate: NSObject, NSApplicationDelegate {
     private let monitor = SystemMonitor()
     private let claude = ClaudeUsageService()
-    private let notch = NotchController()
+    private let scanner = SessionScanner()
+    private let notch: NotchController
+
+    public override init() {
+        notch = NotchController(scanner: scanner)
+        super.init()
+    }
 
     private var statusItem: NSStatusItem?
     private var timer: Timer?

@@ -19,8 +19,11 @@ public final class NotchController {
     private var globalMonitor: Any?
     private var localMonitor: Any?
     private var resignObserver: NSObjectProtocol?
+    private var scanner: SessionScanner?
 
-    public init() {}
+    public init(scanner: SessionScanner? = nil) {
+        self.scanner = scanner
+    }
 
     public func start() {
         requestAccessibility()
@@ -32,8 +35,7 @@ public final class NotchController {
         localMonitor = NSEvent.addLocalMonitorForEvents(
             matching: [.leftMouseDown]
         ) { [weak self] event in
-            self?.handleLocalClick(event)
-            return event
+            self?.handleLocalClick(event) ?? event
         }
     }
 
@@ -49,6 +51,7 @@ public final class NotchController {
         guard !isVisible else { return }
         let target = screen ?? NSScreen.builtIn
         guard let target else { return }
+        setMode(.metrics, sessions: [])
 
         let size = PanelView.size
         let origin: NSPoint
@@ -92,6 +95,40 @@ public final class NotchController {
     public func update(_ snapshot: Snapshot, _ claude: ClaudeUsage) {
         guard isVisible, let view else { return }
         view.update(snapshot: snapshot, claude: claude)
+    }
+
+    private func setMode(_ mode: PanelMode, sessions: [RunningSession]) {
+        view?.setMode(mode, sessions: sessions)
+    }
+
+    private func handleAction(_ action: PanelView.PanelAction) {
+        switch action {
+        case .openSessions:
+            setMode(.sessions, sessions: [])
+            refreshSessions()
+        case .back:
+            setMode(.metrics, sessions: [])
+        case .focus(let pid):
+            if let scanner {
+                scanner.sessions { sessions in
+                    guard let session = sessions.first(where: { $0.pid == pid }) else { return }
+                    SessionFocus.focus(session)
+                }
+            }
+            hide()
+        case .quit:
+            hide()
+            NSApp.terminate(nil)
+        }
+    }
+
+    private func refreshSessions() {
+        guard let scanner else { return }
+        scanner.sessions { [weak self] sessions in
+            guard let self, self.isVisible,
+                  self.view?.currentMode == .sessions else { return }
+            self.setMode(.sessions, sessions: sessions)
+        }
     }
 
     private func makePanel() -> NotchPanel {
@@ -157,12 +194,21 @@ public final class NotchController {
         show(screen: screen)
     }
 
-    private func handleLocalClick(_ event: NSEvent) {
-        guard isVisible else { return }
-        let point = NSEvent.mouseLocation
-        if panel?.frame.contains(point) == false {
+    private func handleLocalClick(_ event: NSEvent) -> NSEvent? {
+        guard isVisible else { return event }
+        guard let view else { return event }
+        if let panel, event.window === panel {
+            let point = view.convert(event.locationInWindow, from: nil)
+            if let action = view.action(at: point) {
+                handleAction(action)
+                return nil
+            }
+            return nil
+        }
+        if panel?.frame.contains(NSEvent.mouseLocation) == false {
             hide()
         }
+        return event
     }
 
     private func requestAccessibility() {

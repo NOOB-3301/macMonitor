@@ -5,8 +5,11 @@ if CommandLine.arguments.contains("--selftest") {
     exit(Int32(SelfCheck.run()))
 }
 
-if let index = CommandLine.arguments.firstIndex(of: "--render"),
-   index + 1 < CommandLine.arguments.count {
+if CommandLine.arguments.contains("--render")
+    || CommandLine.arguments.contains("--render-sessions") {
+    let renderSessionMode = CommandLine.arguments.contains("--render-sessions")
+    let flag = renderSessionMode ? "--render-sessions" : "--render"
+    let index = CommandLine.arguments.firstIndex(of: flag)!
     let path = CommandLine.arguments[index + 1]
     let application = NSApplication.shared
     application.setActivationPolicy(.accessory)
@@ -25,10 +28,35 @@ if let index = CommandLine.arguments.firstIndex(of: "--render"),
         plan: "pro",
         fetchedAt: Date(),
         source: .api,
-        stale: false
+        stale: false,
+        projection: UsageProjection.fiveHour(
+            util: 58,
+            resetsAt: Date().addingTimeInterval(2 * 3600 + 14 * 60),
+            samples: [(53, Date().addingTimeInterval(-26 * 60)),
+                      (58, Date())],
+            now: Date()),
+        weeklyText: UsageProjection.weeklyText(
+            util: 50,
+            resetsAt: Date().addingTimeInterval(3 * 86400 + 4 * 3600),
+            now: Date())
     )
 
+    var renderMode: PanelMode = renderSessionMode ? .sessions : .metrics
+    var renderSessions: [RunningSession] = []
+    if renderSessionMode {
+        renderMode = .sessions
+        renderSessions = [
+            RunningSession(kind: .opencode, pid: 111, cwd: "/Users/arkab/Projects/macMonitor", tty: "ttys001",
+                           sessionID: "ses_a", directory: "/Users/arkab/Projects/macMonitor", title: "macmon panel work"),
+            RunningSession(kind: .claude, pid: 222, cwd: "/Users/arkab/Projects/LiveWallpaper", tty: "ttys003",
+                           sessionID: nil, directory: nil, title: nil),
+            RunningSession(kind: .claude, pid: 333, cwd: "/tmp", tty: "ttys005",
+                           sessionID: "ses_b", directory: "/tmp", title: nil),
+        ]
+    }
+
     let view = PanelView(frame: NSRect(origin: .zero, size: PanelView.size))
+    view.setMode(renderMode, sessions: renderSessions)
     view.update(snapshot: snapshot, claude: claude)
 
     let container = NSView(frame: view.frame)
@@ -52,6 +80,22 @@ if let index = CommandLine.arguments.firstIndex(of: "--render"),
     }
     try? png.write(to: URL(fileURLWithPath: path))
     exit(0)
+}
+
+if CommandLine.arguments.contains("--sessions") {
+    let scanner = SessionScanner()
+    scanner.sessions { rows in
+        for row in rows {
+            let id = row.sessionID ?? "-"
+            let title = row.title ?? "-"
+            print("\(row.kind.rawValue) pid=\(row.pid) tty=\(row.tty) cwd=\(row.cwd) id=\(id) title=\(title)")
+        }
+        print("count=\(rows.count)")
+        exit(0)
+    }
+    RunLoop.main.run(until: Date().addingTimeInterval(10))
+    print("timeout")
+    exit(1)
 }
 
 if CommandLine.arguments.contains("--geometry") {

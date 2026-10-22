@@ -2,6 +2,7 @@
 #define MMSHIMS_H
 
 #include <stdint.h>
+#include <sys/types.h>
 
 typedef struct {
     uint64_t user;
@@ -54,3 +55,26 @@ int mm_temp_supported(void);
 void mm_load_avg(double *a, double *b, double *c);
 
 #endif
+
+typedef struct {
+    pid_t pid;
+    char name[64];
+    char path[1024];
+    char cwd[1024];
+    char argv[2048];
+    char tty[64];
+    int tty_valid;
+} mm_proc_session;
+
+int mm_session_procs(mm_proc_session *out, int max);
+
+typedef struct {
+    char id[64];
+    char dir[1024];
+    char title[512];
+    int found;
+} mm_db_session;
+
+int mm_db_sessions(const char *path, const char *const *ids, int nkeys,
+                   mm_db_session *out, int max, char *errbuf, int errsize);
+void mm_db_close(void);

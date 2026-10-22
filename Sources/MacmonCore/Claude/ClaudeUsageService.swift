@@ -5,16 +5,18 @@ public final class ClaudeUsageService {
     public var onChange: ((ClaudeUsage) -> Void)?
 
     private let session: URLSession
-    private var credentials: ClaudeCredentials?
-    private var credentialsLoadedAt: Date?
     private var nextAttempt = Date.distantPast
     private var failures = 0
     private var fetching = false
     private var estimating = false
     private var loadingCredentials = false
-
+    private var credentials: ClaudeCredentials?
+    private var forcedReloads = 0
+    private var sampleRing: [(util: Double, at: Date)] = []
     private let pollInterval: TimeInterval = 300
     private let staleInterval: TimeInterval = 600
+    private let maxSamples = 49
+    private let maxForcedReloads = 3
 
     private struct Cached: Codable {
         var fiveHour: Double?
@@ -49,12 +51,33 @@ public final class ClaudeUsageService {
     }
 
     public func refreshIfDue(now: Date = Date()) {
-        guard now >= nextAttempt, !fetching else { return }
-        guard let credentials = cachedCredentials(now: now) else {
-            nextAttempt = now.addingTimeInterval(5)
-            loadCredentialsAsync()
+        guard now >= nextAttempt, !fetching, !loadingCredentials else { return }
+        loadingCredentials = true
+        let forceReload = credentials?.isExpired == true
+            && forcedReloads < maxForcedReloads
+        ClaudeCredentialStore.shared.unsafeGet(forceReload: forceReload) { [weak self] credentials in
+            guard let self else { return }
+            self.loadingCredentials = false
+            self.applyCredentials(credentials, forceReload: forceReload, now: now)
+        }
+    }
+
+    private func applyCredentials(_ credentials: ClaudeCredentials?,
+                                  forceReload: Bool, now: Date) {
+        if forceReload && credentials != nil {
+            forcedReloads += 1
+        }
+        guard let credentials else {
+            usage.stale = true
+            usage.source = usage.hasData ? .cache : .local
+            usage.failureReason = "Claude Code credentials not found"
+            deliver()
+            nextAttempt = now.addingTimeInterval(1800)
+            estimateLocal()
             return
         }
+        self.credentials = credentials
+
         if credentials.isExpired {
             usage.stale = true
             usage.source = usage.hasData ? .cache : .local
@@ -99,6 +122,7 @@ public final class ClaudeUsageService {
             case 200:
                 if let data, applyResponse(data, now: now) {
                     failures = 0
+                    forcedReloads = 0
                     usage.stale = false
                     usage.failureReason = nil
                     usage.source = .api
@@ -111,7 +135,13 @@ public final class ClaudeUsageService {
                 }
                 scheduleFailure(reason: "Unreadable usage response", now: now, base: 600)
             case 401, 403:
-                scheduleFailure(reason: "Claude session expired", now: now, base: 1800)
+                if forcedReloads < maxForcedReloads {
+                    forcedReloads += 1
+                    credentials = nil
+                    nextAttempt = .distantPast
+                } else {
+                    scheduleFailure(reason: "Claude session expired", now: now, base: 1800)
+                }
             case 429:
                 scheduleFailure(reason: "Usage endpoint rate limited", now: now, base: 900)
             default:
@@ -168,6 +198,12 @@ public final class ClaudeUsageService {
         }
         updated.fetchedAt = now
         usage = updated
+        if let util = usage.fiveHour {
+            sampleRing.append((util, now))
+            if sampleRing.count > maxSamples {
+                sampleRing.removeFirst(sampleRing.count - maxSamples)
+            }
+        }
         return true
     }
 
@@ -187,45 +223,28 @@ public final class ClaudeUsageService {
         }
     }
 
-    private func cachedCredentials(now: Date) -> ClaudeCredentials? {
-        if let credentials, let loadedAt = credentialsLoadedAt,
-           now.timeIntervalSince(loadedAt) < 600 {
-            return credentials
-        }
-        return nil
-    }
-
-    private func loadCredentialsAsync() {
-        guard !loadingCredentials else { return }
-        loadingCredentials = true
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            let loaded = ClaudeKeychain.loadCredentials()
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.loadingCredentials = false
-                if let loaded {
-                    self.credentials = loaded
-                    self.credentialsLoadedAt = Date()
-                    self.nextAttempt = .distantPast
-                    self.refreshIfDue()
-                } else {
-                    self.usage.stale = true
-                    self.usage.source = self.usage.hasData ? .cache : .local
-                    self.usage.failureReason = "Claude Code credentials not found"
-                    self.deliver()
-                    self.nextAttempt = Date().addingTimeInterval(1800)
-                    self.estimateLocal()
-                }
-            }
-        }
-    }
-
     private func deliver() {
+        computeProjections()
         usage.stale = usage.stale || {
             guard let fetchedAt = usage.fetchedAt else { return true }
             return Date().timeIntervalSince(fetchedAt) > staleInterval
         }()
         onChange?(usage)
+    }
+
+    private func computeProjections() {
+        let now = Date()
+        if let util = usage.fiveHour, let reset = usage.fiveHourReset {
+            usage.projection = UsageProjection.fiveHour(util: util,
+                                                        resetsAt: reset,
+                                                        samples: sampleRing,
+                                                        now: now)
+        } else {
+            usage.projection = nil
+        }
+        usage.weeklyText = UsageProjection.weeklyText(util: usage.sevenDay,
+                                                      resetsAt: usage.sevenDayReset,
+                                                      now: now)
     }
 
     private func number(_ value: Any?) -> Double? {
