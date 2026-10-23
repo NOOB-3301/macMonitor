@@ -1,8 +1,8 @@
 # macmon
 
-A small, always-on macOS menu bar monitor for Apple Silicon. Live CPU, memory, GPU, network, die temperature, and Claude subscription usage. Click the notch (or the menu bar item) to open a compact panel.
+A small, always-on macOS menu bar monitor for Apple Silicon. Live CPU, memory, GPU, network, die temperature, and Claude subscription usage. Click the menu bar item to open a Liquid-Glass-style panel.
 
-No history, no charts, no daemon: one `LSUIElement` process, one run loop, no IPC.
+No history, no charts, no daemon: one `LSUIElement` process, one run loop, no IPC. No special permissions — no Accessibility, no screen recording, no root.
 
 ## Install, update, uninstall
 
@@ -19,56 +19,45 @@ No history, no charts, no daemon: one `LSUIElement` process, one run loop, no IP
 1. Open **System Settings** → **General** → **Login Items & Extensions**.
 2. Under **Open at Login**, click **+** and select `Applications/macmon.app`.
 
-### Screenshots
+## Screenshots
+
 1. Menubar Item
 <img width="87" height="37" alt="image" src="https://github.com/user-attachments/assets/c2dd6fad-793c-4994-8d03-c2784d10a4cd" />
 </br>
 </br>
 
-2. Window 1 (shows stats and claude usage)
-<img width="352" height="462" alt="image" src="https://github.com/user-attachments/assets/ff78a4e7-c151-4945-8597-629643618a22" />
+2. Window 1 (stats and Claude usage)
+<img width="352" height="462" alt="Metrics panel" src="https://github.com/user-attachments/assets/ff78a4e7-c151-4945-8597-629643618a22" />
 </br>
-3. Window 2 (shows currently active sessions, opens vscode or terminal where that session is running)
-<img width="356" height="464" alt="image" src="https://github.com/user-attachments/assets/d265faa1-cde4-4376-a17f-a98031bc81f5" />
-</br>
-  
-4. Window 3 (Limit for shwoing intensive apps , when they cross this threshhold it shows in main window)
-<img width="349" height="463" alt="image" src="https://github.com/user-attachments/assets/d51bf468-a5a0-4f8d-987f-3ba1bdc88474" />
+3. Window 2 (active sessions; clicking a row focuses the VS Code / terminal host)
+<img width="356" height="464" alt="Sessions panel" src="https://github.com/user-attachments/assets/d265faa1-cde4-4376-a17f-a98031bc81f5" />
 </br>
 
-## Scripts
-| Action | Command |
-|---|---|
-| Install, update, or reinstall | `./scripts/install.sh` |
-| Uninstall, keep cached Claude stats | `./scripts/uninstall.sh` |
-| Uninstall and clear all cached state | `./scripts/uninstall.sh --purge` |
+4. Window 3 (alert thresholds; when a metric crosses the limit the main window shows the top offender)
+<img width="349" height="463" alt="Limits panel" src="https://github.com/user-attachments/assets/d51bf468-a5a0-4f8d-987f-3ba1bdc88474" />
+</br>
 
-What each one does:
+## The panel
 
-- **Install / update**: builds `build/macmon.app`, boots out any running launch agent, stops the old process, replaces `~/Applications/macmon.app`, rewrites `~/Library/LaunchAgents/dev.arkab.macmon.plist`, then bootstraps it. Your cached Claude percentages in `~/Library/Application Support/macmon/` are preserved.
-- **Uninstall**: boots out the launch agent, stops the process, deletes the app and the plist. Cached Claude stats and the JSONL read offsets remain.
-- **Uninstall `--purge`**: same, plus deletes `claude.json` and `jsonl-state.json` and the cache directory. It never touches Keychain credentials, Claude Code logs, or Accessibility permissions.
+- Click the menu bar item to toggle the panel; click outside or press Escape to close (transient popover).
+- **Metrics** — CPU / memory / GPU / network / temperature rows with animated usage bars, plus a Claude usage card (5-hour and weekly windows, plan tag, pace projection).
+- **Sessions** — running `claude` / `opencode` sessions with working-directory and tty; click a row to focus its host app.
+- **Limits** — thresholds for CPU / MEM / GPU; tap a row to cycle presets. Values persist in `UserDefaults`.
+- The panel follows the system light/dark appearance. On macOS 26 inner cards use `NSGlassEffectView` (Liquid Glass); on macOS 14/15 they use a subtle elevated surface.
+- The menu bar title shows CPU percent and peak die temperature, e.g. `12% 53°`; a red dot appears while a threshold alert is active.
 
-Run the script names exactly; do not type the brackets (`[--purge]` is a glob in zsh and will fail).
+## Usage
 
-After a reinstall, macOS may ask for **Accessibility** again (the bundle is replaced) and the Keychain prompt may reappear if the signature changed. Choose Always Allow / re-enable macmon in System Settings.
-
-```
-CPU          24%                MEMORY   12.4 GB / 16.0 GB
-load 3.42 · 10 cores           wired 3.2 GB · comp 6.1 GB · swap 508 MB
-GPU          41%                NETWORK  ↓ 5.2 KB/s   ↑ 50.4 KB/s
-TEMPERATURE  53°C               gpu 51°C · peak 53°C
-CLAUDE       PRO
-5 hour       58%   resets in 2h 14m
-weekly       50%   resets in 3d 4h
-```
+- Closed: samples every 5 s. Open: every 2 s. Sampling pauses when the display sleeps.
+- Claude usage polls at most every 5 minutes, backs off on 429s, and shows cached values as `STALE` when offline or rate limited.
+- No history is stored. Only the latest sample exists in memory.
 
 ## Requirements
 
-- macOS 14 or newer. Notch-click needs a built-in display with a notch (MacBook Air/Pro); otherwise use the menu bar item.
+- macOS 14 or newer. Liquid Glass card surfaces require macOS 26; older systems get the fallback material automatically.
 - Apple Silicon (temperature and GPU readers target Apple Silicon).
 - Swift 6 toolchain. Command Line Tools are enough; Xcode is not required.
-- No root, no sudo, no entitlements, no sandbox.
+- No permissions: no Accessibility, no root, no sudo, no entitlements, no sandbox.
 
 ## Build
 
@@ -77,7 +66,13 @@ cd ~/Projects/macMonitor
 ./scripts/build.sh
 ```
 
-Produces `build/macmon.app`, signed ad-hoc by default. To run it in development:
+Produces `build/macmon.app`, signed ad-hoc by default. The bundle icon comes from `Resources/AppIcon.icns`; if it is missing, build.sh stops and asks you to select one:
+
+```sh
+./scripts/icons.sh select panes
+```
+
+To run the app in development:
 
 ```sh
 open build/macmon.app
@@ -103,16 +98,21 @@ Copies the app to `~/Applications/macmon.app`, writes `~/Library/LaunchAgents/de
 ./scripts/uninstall.sh --purge   # also remove cached stats
 ```
 
-## Use
+Your cached Claude percentages in `~/Library/Application Support/macmon/` are preserved by install/uninstall (use `--purge` to clear).
 
-- Click the notch area, or the menu bar item, to toggle the panel.
-- Click outside or press Escape to close.
-- The panel is always dark with high-contrast text, regardless of the system light/dark setting, so it stays readable over any wallpaper.
-- The menu bar title shows CPU percent and peak die temperature, e.g. `12% 53°`.
-- Closed: samples every 5 s. Open: every 2 s. Sampling pauses when the display sleeps.
-- Claude usage polls at most every 5 minutes, backs off on 429s, and shows cached values as `STALE` when offline or rate limited.
+After a reinstall, the Keychain prompt may reappear if the signature changed. Choose Always Allow / re-enable macmon in System Settings.
 
-No history is stored. Only the latest sample exists in memory.
+## Icon
+
+The icon source is `Resources/icons/panes.svg`; the committed bundle icon is `Resources/AppIcon.icns` (generated from it via `scripts/icons.sh`).
+
+```sh
+./scripts/icons.sh build        # re-render iconset + .icns from the SVG
+./scripts/icons.sh select panes # copy the .icns → Resources/AppIcon.icns
+./scripts/icons.sh clean        # remove generated iconsets/icns (keeps the SVG)
+```
+
+Rendering uses `rsvg-convert`, ImageMagick, or `qlmanage` (auto-detected, in that order). `build.sh` embeds `Resources/AppIcon.icns` in the bundle, and the release DMG picks it up.
 
 ## What it reads
 
@@ -155,9 +155,8 @@ First Keychain read prompts once. Choose **Always Allow**. Rebuilding with an ad
 
 ## Permissions
 
-- **Accessibility** — required only to detect clicks in the notch region via a global mouse monitor. macOS prompts on first launch. Without it, the menu bar item still works fully.
 - **Keychain** — read-only access to the Claude Code credentials item, as above.
-- Nothing else. No screen recording, no input monitoring beyond the click monitor, no network access other than the usage endpoint.
+- Nothing else. No screen recording, no input monitoring, no global event monitors, no network access other than the usage endpoint.
 
 ## Claude usage panel
 
@@ -171,9 +170,9 @@ minutes of utilization samples: `exhausted` (red), `runout ~… before reset`
 (green) or `on pace · resets …` (green). The weekly bar shows
 `N% used · resets <day time>`.
 
-### Open sessions
+### Sessions
 
-`OPEN SESSIONS →` on the metrics page opens a session list: running `claude` /
+`Sessions` in the panel footer opens the session list: running `claude` /
 `opencode` processes with their terminal tty and working directory. `opencode`
 rows are enriched with title/directory from the local `opencode.db`
 (read-only, loaded via dlopen only while the page is open). Clicking a row
@@ -182,10 +181,10 @@ running application is found — VS Code is activated, Terminal/iTerm2 are
 activated and the matching tty tab is selected. If no host app resolves, the
 click does nothing.
 
-### Threshold alerts
+### Threshold limits
 
-`LIMITS ›` opens the limits page where tapping CPU / MEM / GPU cycles through
-presets (CPU 70–95%, MEM 80–95%, GPU 60–95%); values persist in
+`Limits` in the panel footer opens the limits page; tapping CPU / MEM / GPU
+cycles through presets (CPU 70–95%, MEM 80–95%, GPU 60–95%); values persist in
 `UserDefaults`. While the panel is open, a metric above its limit replaces that
 row's detail line with the top offender: the highest-CPU process (with ≥10%
 utilization) for CPU, the largest process ≥1 GB for memory, `busy` for GPU
@@ -202,7 +201,7 @@ Measured on a MacBook Air M5 (16 GB, macOS 26.4), one minute after launch with t
 | Private dirty | ~7–10 MB |
 | RSS | ~39–49 MB (includes shared AppKit/Swift pages) |
 | Idle CPU | 0.0–0.4 % (0.1 % steady) |
-| Binary size | ~470 KB |
+| Binary size | ~500 KB |
 | Peak footprint at first launch | ~58 MB (Swift runtime + URLSession + first Keychain/JSON work) |
 
 RSS overstates a Swift/AppKit app because it counts shared framework pages; use `footprint -p <pid>` for the number that matters. Gates used during development: footprint ≤ 24 MB, private dirty ≤ 8 MB, idle CPU ≤ 0.3 %.
@@ -214,11 +213,12 @@ swift build -c release
 
 .build/release/MacmonApp --selftest   # pure math/format/geometry checks
 .build/release/MacmonApp --probe      # one-shot sensor dump incl. Claude
-.build/release/MacmonApp --geometry   # screen, notch rect, trigger rect
 .build/release/MacmonApp --render /tmp/panel.png   # render the metrics page to PNG
 .build/release/MacmonApp --render-sessions /tmp/sessions.png   # render the sessions page to PNG
 .build/release/MacmonApp --render-limits /tmp/limits.png   # render the limits page to PNG
-.build/release/MacmonApp --toptest   # dump top CPU/MEM processes once
+MM_RENDER_APPEARANCE=light .build/release/MacmonApp --render /tmp/light.png   # render in light appearance
+MM_RENDER_DUMP=1 .build/release/MacmonApp --render /tmp/x.png   # dump the view/layout tree while rendering
+.build/release/MacmonApp --toptest    # dump top CPU/MEM processes once
 .build/release/MacmonApp --sessions   # print running claude/opencode sessions
 MM_DEBUG=1 .build/release/MacmonApp --probe   # verbose SMC discovery/values
 MACMON_DEMO=1 .build/release/MacmonApp        # open the panel after 1.5 s
@@ -236,11 +236,11 @@ To create a stable signing identity for development:
 
 **Temperature shows `--`.** Run `MM_DEBUG=1 .build/release/MacmonApp --probe`. If SMC discovery fails, the keys may have changed in an OS update; the rest of the app still works.
 
-**Clicking the notch does nothing.** Grant Accessibility to `macmon` in System Settings → Privacy & Security → Accessibility, then relaunch. After reinstalling, re-add the app.
-
 **Keychain prompt on every rebuild.** Ad-hoc signatures change identity. Use the `macmon-dev` certificate.
 
 **Claude section says STALE or LOCAL ESTIMATE.** The usage endpoint rate-limits undocumented clients. The panel shows the reason. Polling is already floored at 5 minutes with exponential backoff; do not lower it.
+
+**build.sh stops asking for an icon.** Run `./scripts/icons.sh select <name>` once; `Resources/AppIcon.icns` is committed, so CI builds need no SVG renderer.
 
 **Launch agent does not start.**
 
@@ -249,7 +249,7 @@ launchctl print gui/$(id -u)/dev.arkab.macmon
 log show --last 5m --predicate 'process == "macmon"'
 ```
 
-**Menu bar item is missing.** macOS hides overflow items; remove another item or widen available space. The notch trigger is independent of the status item.
+**Menu bar item is missing.** macOS hides overflow items; remove another item or widen available space.
 
 ## Project layout
 
@@ -264,12 +264,16 @@ Sources/
     Formatters.swift byte/rate/temp/countdown formatting
     SelfCheck.swift  built-in checks
     Claude/          Keychain, usage client, JSONL fallback
-    Notch/           notch geometry
-    UI/              PanelView (single custom-drawn view)
-    App/             AppDelegate, NotchController
+    Alerts/          thresholds, alert engine, process sampler
+    Sessions/        session scanning and focus
+    UI/              Theme, components, PanelViewController, MenuBarController
+    App/             AppDelegate
   MacmonApp/         main.swift
-Resources/Info.plist
-scripts/             build, install, uninstall, measure
+Resources/
+  Info.plist         bundle metadata
+  icons/             SVG icon candidates + generated iconsets/previews
+  dmg-background.*   DMG backdrop
+scripts/             build, icons, install, uninstall, measure
 ```
 
 ## Privacy

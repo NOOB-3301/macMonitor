@@ -10,6 +10,7 @@ jobs:
     runs-on: macos-latest
     permissions:
       contents: write
+      id-token: write
 
     steps:
       - name: Checkout
@@ -19,13 +20,48 @@ jobs:
         run: ./scripts/build.sh
 
       - name: Create DMG
+        env:
+          CREATE_DMG: 1
+        run: ./scripts/build.sh
+
+      - name: Code Sign App (if credentials available)
+        if: env.APPLE_CERTIFICATE != '' && env.APPLE_CERTIFICATE_PASSWORD != ''
         run: |
-          DMG_NAME="macmon-${GITHUB_REF_NAME}.dmg"
-          hdiutil create -volname "macmon" -srcfolder "build/macmon.app" -ov -format UDZO "$DMG_NAME"
-          echo "dmg_name=$DMG_NAME" >> "$GITHUB_OUTPUT"
-        id: dmg
+          # Import certificate
+          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
+          security create-keychain -p "" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "" build.keychain
+          security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "" build.keychain
+          
+          # Sign the app
+          codesign --force --sign "Developer ID Application" --options runtime --timestamp build/macmon.app
+          
+          # Verify signature
+          codesign --verify --verbose build/macmon.app
+          spctl --assess --type execute --verbose build/macmon.app
+
+      - name: Notarize App (if credentials available)
+        if: env.APPLE_ID != '' && env.APPLE_TEAM_ID != '' && env.APPLE_PASSWORD != ''
+        run: |
+          # Create DMG for notarization
+          hdiutil create -volname "macmon" -srcfolder "build/dmg" -ov -format UDZO "macmon-notarize.dmg"
+          
+          # Submit for notarization
+          xcrun notarytool submit "macmon-notarize.dmg" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_PASSWORD" \
+            --wait
+          
+          # Staple the notarization
+          xcrun stapler staple "macmon-notarize.dmg"
+          
+          # Use notarized DMG
+          mv "macmon-notarize.dmg" "macmon.dmg"
 
       - name: Upload release asset
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ steps.dmg.outputs.dmg_name }}
+          files: macmon.dmg

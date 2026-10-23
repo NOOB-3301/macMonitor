@@ -1,4 +1,3 @@
-import AppKit
 import Foundation
 
 public enum SelfCheck {
@@ -25,18 +24,6 @@ public enum SelfCheck {
         near("memory fraction", MemoryReading(used: 8, total: 16).fraction, 0.5)
         equal("pressure warning", MemoryPressure.from(2).label, "warning")
         equal("pressure unknown", MemoryPressure.from(99).label, "normal")
-
-        let geometry = NotchGeometry(
-            screenFrame: NSRect(x: 0, y: 0, width: 1440, height: 900),
-            notchRect: NSRect(x: 650, y: 868, width: 140, height: 32),
-            triggerRect: NSRect(x: 646, y: 864, width: 148, height: 36)
-        )
-        let origin = geometry.panelOrigin(size: NSSize(width: 344, height: 336))
-        near("panel centered", origin.x, 720 - 172)
-        near("panel below notch", origin.y, 868 - 8 - 336)
-        let tallOrigin = geometry.panelOrigin(size: PanelView.size)
-        near("panel tall x", tallOrigin.x, 720 - PanelView.size.width / 2)
-        near("panel tall y", tallOrigin.y, 868 - 8 - PanelView.size.height)
 
         let now = Date()
         let resetsAt = now.addingTimeInterval(3600)

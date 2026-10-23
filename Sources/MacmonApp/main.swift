@@ -17,7 +17,9 @@ if CommandLine.arguments.contains("--render")
     let path = CommandLine.arguments[index + 1]
     let application = NSApplication.shared
     application.setActivationPolicy(.accessory)
-    application.appearance = NSAppearance(named: .darkAqua)
+    let lightMode = ProcessInfo.processInfo.environment["MM_RENDER_APPEARANCE"] == "light"
+    let renderAppearance = NSAppearance(named: lightMode ? .aqua : .darkAqua)
+    application.appearance = renderAppearance
 
     let monitor = SystemMonitor()
     _ = monitor.refresh()
@@ -83,32 +85,57 @@ if CommandLine.arguments.contains("--render")
         hot.gpu.utilization = max(hot.gpu.utilization, 91)
     }
 
-    let view = PanelView(frame: NSRect(origin: .zero, size: PanelView.size))
-    view.setMode(renderMode, sessions: renderSessions)
-    view.update(snapshot: hot, claude: claude,
-                alerts: renderAlerts, thresholds: renderThresholds)
+    let panelController = PanelViewController()
+    panelController.setMode(renderMode, sessions: renderSessions)
+    panelController.update(snapshot: hot, claude: claude,
+                           alerts: renderAlerts, thresholds: renderThresholds)
+    GlassCard.forceFallbackSurface = true
+    panelController.loadViewIfNeeded()
 
-    let container = NSView(frame: view.frame)
+    let size = Theme.panelSize
+    let container = NSView(frame: NSRect(origin: .zero, size: size))
     container.wantsLayer = true
-    container.layer?.backgroundColor = NSColor(calibratedWhite: 0.10, alpha: 1).cgColor
-    container.addSubview(view)
+    container.layer?.backgroundColor = (lightMode
+        ? NSColor(calibratedWhite: 0.92, alpha: 1)
+        : NSColor(calibratedWhite: 0.13, alpha: 1)).cgColor
+    container.layer?.cornerRadius = Theme.radius(.panel)
+    container.layer?.masksToBounds = true
+    container.addSubview(panelController.view)
 
-    let window = NSWindow(contentRect: view.frame, styleMask: [.borderless],
+    let window = NSWindow(contentRect: container.frame, styleMask: [.borderless],
                           backing: .buffered, defer: false)
-    window.appearance = NSAppearance(named: .darkAqua)
+    window.appearance = renderAppearance
     window.contentView = container
     window.orderBack(nil)
-    container.layoutSubtreeIfNeeded()
+    panelController.view.frame = container.bounds
 
-    guard let rep = container.bitmapImageRepForCachingDisplay(in: container.bounds) else {
-        exit(1)
+    var rendered: NSBitmapImageRep?
+    renderAppearance?.performAsCurrentDrawingAppearance {
+        container.layoutSubtreeIfNeeded()
+        if ProcessInfo.processInfo.environment["MM_RENDER_DUMP"] == "1" {
+            dumpTree(container, depth: 0)
+        }
+        guard let rep = container.bitmapImageRepForCachingDisplay(in: container.bounds) else {
+            return
+        }
+        container.cacheDisplay(in: container.bounds, to: rep)
+        rendered = rep
     }
-    container.cacheDisplay(in: container.bounds, to: rep)
-    guard let png = rep.representation(using: .png, properties: [:]) else {
+    guard let rep = rendered,
+          let png = rep.representation(using: .png, properties: [:]) else {
         exit(1)
     }
     try? png.write(to: URL(fileURLWithPath: path))
     exit(0)
+}
+
+private func dumpTree(_ view: NSView, depth: Int) {
+    let hidden = view.isHidden ? " HIDDEN" : ""
+    let label = (view as? NSTextField)?.stringValue ?? ""
+    print("\(String(repeating: "  ", count: depth))\(type(of: view)) \(view.frame)\(hidden) '\(label)'")
+    for child in view.subviews {
+        dumpTree(child, depth: depth + 1)
+    }
 }
 
 if CommandLine.arguments.contains("--sessions") {
@@ -125,22 +152,6 @@ if CommandLine.arguments.contains("--sessions") {
     RunLoop.main.run(until: Date().addingTimeInterval(10))
     print("timeout")
     exit(1)
-}
-
-if CommandLine.arguments.contains("--geometry") {
-    _ = NSApplication.shared
-    for screen in NSScreen.screens {
-        print("screen frame=\(screen.frame) visible=\(screen.visibleFrame) notch=\(screen.hasNotch) inset=\(screen.safeAreaInsets.top)")
-        if let left = screen.auxiliaryTopLeftArea,
-           let right = screen.auxiliaryTopRightArea {
-            print("  left=\(left) right=\(right)")
-        }
-        if let geometry = NotchGeometry.make(for: screen) {
-            print("  notchRect=\(geometry.notchRect) trigger=\(geometry.triggerRect)")
-            print("  panelOrigin=\(geometry.panelOrigin(size: PanelView.size))")
-        }
-    }
-    exit(0)
 }
 
 if CommandLine.arguments.contains("--probe") {

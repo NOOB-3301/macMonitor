@@ -6,10 +6,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private let scanner = SessionScanner()
     private let sampler = ProcessSampler()
     private var debouncer = AlertDebouncer()
-    private let notch: NotchController
+    private let panel: MenuBarController
 
     public override init() {
-        notch = NotchController(scanner: scanner)
+        panel = MenuBarController(scanner: scanner)
         super.init()
     }
 
@@ -18,16 +18,16 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastSnapshot = Snapshot()
     private var lastTitle = ""
     private var panelVisible = false
+    private var alertsActive = false
     private var interval: TimeInterval = 5
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         setupStatusItem()
 
-        notch.onChange = { [weak self] in
+        panel.onChange = { [weak self] in
             self?.panelVisibilityChanged()
         }
-        notch.start()
 
         claude.onChange = { [weak self] usage in
             self?.claudeChanged(usage)
@@ -42,7 +42,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if ProcessInfo.processInfo.environment["MACMON_DEMO"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                self?.notch.show()
+                self?.panel.toggle(from: self?.statusItem?.button)
             }
         }
 
@@ -72,7 +72,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func togglePanel() {
-        notch.toggle()
+        panel.toggle(from: statusItem?.button)
     }
 
     private func schedule(interval: TimeInterval) {
@@ -89,23 +89,29 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private func tick() {
         lastSnapshot = monitor.refresh()
         claude.refreshIfDue()
-        updateStatusItem()
+        var alerts: [AlertLine] = []
         if panelVisible {
             let result = sampler.poll()
-            let raw = AlertEngine.evaluate(lastSnapshot, thresholds: notch.currentThresholds(),
-                                           cpuTop: result.cpuTop, memTop: result.memTop)
-            let alerts = debouncer.observe(raw)
-            notch.update(lastSnapshot, claude.usage, alerts: alerts)
+            let raw = AlertEngine.evaluate(lastSnapshot,
+                                           thresholds: panel.currentThresholds(),
+                                           cpuTop: result.cpuTop,
+                                           memTop: result.memTop)
+            alerts = debouncer.observe(raw)
+        }
+        alertsActive = !alerts.isEmpty
+        updateStatusItem()
+        if panelVisible {
+            panel.update(lastSnapshot, claude.usage, alerts: alerts)
         }
     }
 
     private func panelVisibilityChanged() {
-        panelVisible = notch.isVisible
+        panelVisible = panel.isVisible
         schedule(interval: panelVisible ? 2 : 5)
         if panelVisible {
             sampler.reset()
             lastSnapshot = monitor.refresh()
-            notch.update(lastSnapshot, claude.usage, alerts: [])
+            panel.update(lastSnapshot, claude.usage, alerts: [])
         } else {
             sampler.reset()
             debouncer.reset()
@@ -116,7 +122,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private func claudeChanged(_ usage: ClaudeUsage) {
         updateStatusItem()
         if panelVisible {
-            notch.update(lastSnapshot, usage, alerts: [])
+            panel.update(lastSnapshot, usage, alerts: [])
         }
     }
 
@@ -131,6 +137,21 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             lastTitle = title
         }
 
+        let baseFont = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+        if alertsActive {
+            let dot = NSAttributedString(
+                string: "● ",
+                attributes: [.foregroundColor: NSColor.systemRed, .font: baseFont])
+            let text = NSAttributedString(
+                string: title,
+                attributes: [.foregroundColor: NSColor.labelColor, .font: baseFont])
+            button.attributedTitle = combine(dot, text)
+        } else {
+            button.attributedTitle = NSAttributedString(
+                string: title,
+                attributes: [.foregroundColor: NSColor.labelColor, .font: baseFont])
+        }
+
         var tooltip: [String] = []
         tooltip.append("CPU \(Format.percent(lastSnapshot.cpu.total))")
         tooltip.append("RAM \(Format.bytes(lastSnapshot.memory.used)) / \(Format.bytes(lastSnapshot.memory.total))")
@@ -141,6 +162,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             tooltip.append("Claude 5h \(Format.percent(claudeValue))")
         }
         button.toolTip = tooltip.joined(separator: "  ·  ")
+    }
+
+    private func combine(_ first: NSAttributedString,
+                         _ second: NSAttributedString) -> NSAttributedString {
+        let combined = NSMutableAttributedString(attributedString: first)
+        combined.append(second)
+        return combined
     }
 
     @objc private func systemWoke() {
