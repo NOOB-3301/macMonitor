@@ -46,6 +46,10 @@ public final class MenuBarController: NSObject, NSPopoverDelegate {
 
     private var latestState: (Snapshot, ClaudeUsage, [AlertLine]) = (Snapshot(), ClaudeUsage(), [])
 
+    public func popoverDidShow(_ notification: Notification) {
+        onChange?()
+    }
+
     public func popoverDidClose(_ notification: Notification) {
         onChange?()
     }

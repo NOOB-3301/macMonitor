@@ -22,19 +22,15 @@ No history, no charts, no daemon: one `LSUIElement` process, one run loop, no IP
 ## Screenshots
 
 1. Menubar Item
-<img width="87" height="37" alt="image" src="https://github.com/user-attachments/assets/c2dd6fad-793c-4994-8d03-c2784d10a4cd" />
+<img width="87" height="37" alt="image" src="ScreenShots/menu_icon.png" />
 </br>
 </br>
 
 2. Window 1 (stats and Claude usage)
-<img width="352" height="462" alt="Metrics panel" src="https://github.com/user-attachments/assets/ff78a4e7-c151-4945-8597-629643618a22" />
+<img width="352" height="462" alt="Metrics panel" src="ScreenShots/claude_usage.png" />
 </br>
 3. Window 2 (active sessions; clicking a row focuses the VS Code / terminal host)
-<img width="356" height="464" alt="Sessions panel" src="https://github.com/user-attachments/assets/d265faa1-cde4-4376-a17f-a98031bc81f5" />
-</br>
-
-4. Window 3 (alert thresholds; when a metric crosses the limit the main window shows the top offender)
-<img width="349" height="463" alt="Limits panel" src="https://github.com/user-attachments/assets/d51bf468-a5a0-4f8d-987f-3ba1bdc88474" />
+<img width="356" height="464" alt="Sessions panel" src="ScreenShots/live_session.png" />
 </br>
 
 ## The panel

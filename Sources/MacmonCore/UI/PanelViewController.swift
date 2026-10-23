@@ -407,19 +407,17 @@ public final class PanelViewController: NSViewController {
     }
 
     private func refreshClaude() {
-        claudeCard?.isHidden = !claude.hasData
         guard claudeRows.count == 2,
               let status = claudeStatusField,
               let extra = claudeExtraField else { return }
 
-        if claude.stale {
-            if claude.source == .local {
-                status.stringValue = "LOCAL ESTIMATE"
-                status.textColor = Theme.color(.warning)
-            } else {
-                status.stringValue = "STALE"
-                status.textColor = Theme.color(.warning)
-            }
+        if !claude.hasData {
+            status.stringValue = "NO USAGE"
+            status.textColor = Theme.color(.warning)
+        } else if claude.stale {
+            status.stringValue = claude.source == .local
+                ? "LOCAL ESTIMATE" : "STALE"
+            status.textColor = Theme.color(.warning)
         } else {
             status.stringValue = (claude.plan ?? "claude").uppercased()
             status.textColor = Theme.color(.secondary)
@@ -460,7 +458,8 @@ public final class PanelViewController: NSViewController {
         if let tokens = claude.localTokens, tokens > 0 {
             extraParts.append("local usage ~\(Self.tokenString(tokens)) tokens / 5h")
         }
-        if let reason = claude.failureReason, claude.source != .local {
+        if let reason = claude.failureReason,
+           claude.hasData ? claude.source != .local : true {
             extraParts.append(reason.lowercased())
         }
         extra.stringValue = extraParts.joined(separator: "  ·  ")

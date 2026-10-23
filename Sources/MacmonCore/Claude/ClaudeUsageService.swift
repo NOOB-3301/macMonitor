@@ -72,7 +72,7 @@ public final class ClaudeUsageService {
             usage.source = usage.hasData ? .cache : .local
             usage.failureReason = "Claude Code credentials not found"
             deliver()
-            nextAttempt = now.addingTimeInterval(1800)
+            nextAttempt = now.addingTimeInterval(120)
             estimateLocal()
             return
         }
@@ -86,7 +86,7 @@ public final class ClaudeUsageService {
                 usage.plan = subscription
             }
             deliver()
-            nextAttempt = now.addingTimeInterval(1800)
+            nextAttempt = now.addingTimeInterval(300)
             estimateLocal()
             return
         }
